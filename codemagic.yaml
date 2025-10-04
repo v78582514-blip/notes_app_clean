@@ -1,13 +1,12 @@
 workflows:
   debug_apk:
-    name: Debug APK (embedded notes)
+    name: Debug APK (fetch notes from GitHub)
     max_build_duration: 60
     environment:
       flutter: stable
       vars:
         APP_NAME: notice_app
         PACKAGE_NAME: com.example.notice_app
-
     scripts:
       - name: Create Flutter project
         script: |
@@ -19,29 +18,28 @@ workflows:
           echo "Using project name: $SAFE_NAME"
           flutter create --org "${PACKAGE_NAME}" --project-name "$SAFE_NAME" --overwrite .
 
-      - name: Write lib/main.dart from embedded Base64
+      - name: Fetch Notes main.dart from GitHub raw
         script: |
           set -e
           mkdir -p lib
-          # Пишем base64 в файл и декодируем в lib/main.dart
-          cat > lib/main.dart.b64 <<'B64'
-{{aW1wb3J0ICdkYXJ0OmNvbnZlcnQnOwppbXBvcnQgJ3BhY2thZ2U6Zmx1dHRlci9tYXRlcmlhbC5kYXJ0JzsKaW1wb3J0ICdwYWNrYWdlOnNoYXJlZF9wcmVmZXJlbmNlcy9zaGFyZWRfcHJlZmVyZW5jZXMuZGFydCc7Cgp2b2lkIG1haW4oKSB7CiAgV2lkZ2V0c0ZsdXR0ZXJCaW5kaW5nLmVuc3VyZUluaXRpYWxpemVkKCk7CiAgcnVuQXBwKGNvbnN0IE5vdGVzQXBwKCkpOwp9CgpjbGFzcyBOb3Rlc0FwcCBleHRlbmRzIFN0YXRlbGVzc0dpZGdldCB7CiAgY29uc3QgTm90ZXNBcHAoeyBzdXBlci5rZXkgfSk7CgogIEBvdmVycmlkZQogIFdpZGdldCBidWlsZChCdWlsZENvbnRleHQgY29udGV4dCkgewogICAgcmV0dXJuIE1hdGVyaWFsQXBwKAogICAgICBkZWJ1Z1Nob3dDaGVja2VkTW9kZUJhbm5lcjogZmFsc2UsCiAgICAgIHRpdGxlOiAnWmFtZXRraScsCiAgICAgIHRoZW1lOiBUaGVtZURhdGEoCiAgICAgICAgdXNlTWF0ZXJpYWwzOiB0cnVlLAogICAgICAgIGNvbG9yU2NoZW1lOiBDb2xvclNjaGVtZS5mcm9tU2VlZChzZWVkQ29sb3I6IENvbG9ycy5pbmRpZ28pLAogICAgICAgIGlucHV0RGVjb3JhdGlvblRoZW1lOiBjb25zdCBJbnB1dERlY29yYXRpb25UaGVtZShib3JkZXI6IE91dGxpbmVCb3JkZXIoKSksCiAgICAgICksCiAgICAgIGRhcmsiVGhlbWU6IFRoZW1lRGFyay5kYXJrKHVzZU1hdGVyaWFsMzogdHJ1ZSksCiAgICAgIHRoZW1lTW9kZTogVGhlbWVNb2RlLnN5c3RlbSwKICAgICAgIGhvbWU6IGNvbnN0IE5vdGVzSG9tZVBhZ2UoKSwKICAgICk7CiAgfQp9CgpjbGFzcyBOb3RlIHsKICBTdHJpbmcgaWQ7CiAgU3RyaW5nIHRleHQ7CiAgRGF0ZVRpbWUgY3JlYXRlZEF0OwogIERhdGVUaW1lIHVwZGF0ZWRBdDsKICBib29sIHBpbm5lZDsKICBpbnQ/IHBhY2VYQ29sb3I7CgogIE5vdGUoewogICAgcmVxdWlyZWQgdGhpcy5pZCwKICAgIHJlcXVpcmVkIHRoaXMudGV4dCwKICAgIHJlcXVpcmVkIHRoaXMuY3JlYXRlZEF0LAogICAgcmVxdWlyZWQgdGhpcy51cGRhdGVkQXQsCiAgICB0aGlzLnBpbm5lZCA9IGZhbHNlLAogICAgdGhpcy5wYWNlWENvbG9yLAogIH0pOwoKICBmYWN0b3J5IE5vdGUubmV3Tm90ZSgpIHsKICAgIGZpbmFsIG5vdyA9IERhdGVUaW1lLm5vdygpOwogICAgcmV0dXJuIE5vdGUoCiAgICAgIGlkOiBub3cubWljcm9zZWNvbmRzU2luY2VFcG9jaC50b1N0cmluZygpLAogICAgICB0ZXh0OiAnJywKICAgICAgY3JlYXRlZEF0OiBub3csCiAgICAgIHVwZGF0ZWRBdDogbm93LAogICAgKTsKICB9CgogIE5vdGUgY29weVdpdGgoewogICAgU3RyaW5nPyB0ZXh0LAogICAgYm9vbD8gcGlubmVkLAogICAgRGF0ZVRpbWU/IHVwZGF0ZWRBdCwKICAgIGludD8gcGFjZVhDb2xvcgogIH0pID0+CiAgICAgIE5vdGUoCiAgICAgICAgaWQ6IGlkLAogICAgICAgIHRleHQ6IHRleHQgfCB0aGlzLnRleHQsCiAgICAgICAgY3JlYXRlZEF0OiBjcmVhdGVkQXQsCiAgICAgICAgdXBkYXRlZEF0OiB1cGRhdGVkQXQgfCB0aGlzLnVwZGF0ZWRBdCwKICAgICAgICBwaW5uZWQ6IHBpbm5lZCB8fCB0aGlzLnBpbm5lZCwKICAgICAgICBwYWNlWENvbG9yOiBwYWNlWENvbG9yICE9IG51bGw/IHBhY2VYQ29sb3I6IHBhY2VYQ29sb3IsCiAgICAgICksCgogIE1hcDxTdHJpbmcsIGR5bmFtaWM+IHRvSnNvbigpID0+IHsKICAgIHJldHVybiB7CiAgICAgICdpZCc6IGlkLAogICAgICAndGV4dCc6IHRleHQsCiAgICAgICdjcmVhdGVkQXQnOiBjcmVhdGVkQXQubWlsbGlzZWNvbmRzU2luY2VFcG9jaCwKICAgICAgJ3VwZGF0ZWRBdCc6IHVwZGF0ZWRBdC5taWxsaXNlY29uZHNTaW5jZUVwb2NoLAogICAgICAncGlubmVkJzogcGlubmVkLAogICAgICAncGFjZVhDb2xvcic6IHBhY2VYQ29sb3IsCiAgICB9OwogIH07CgogIHN0YXRpYyBOb3RlIGZyb21Kc29uKE1hcDxTdHJpbmcsIGR5bmFtaWM+IGpzb24pID0+IE5vdGUoCiAgICBpZDoganNvblsnaWQnXSBhcyBTdHJpbmcsCiAgICB0ZXh0OiBqc29uWyd0ZXh0J10gYXMgU3RyaW5nLAogICAgY3JlYXRlZEF0OiBEYXRlVGltZS5mcm9tTWlsbGlzZWNvbmRzU2luY2VFcG9jaChqc29uWydjcmVhdGVkQXQnXSBhcyBpbnQpLAogICAgdXBkYXRlZEF0OiBEYXRlVGltZS5mcm9tTWlsbGlzZWNvbmRzU2luY2VFcG9jaChqc29uWyd1cGRhdGVkQXQnXSBhcyBpbnQpLAogICAgcGlubmVkOiBqc29uWydwaW5uZWQnXSBhcyBib29sPyB8fCBmYWxzZSwKICAgIHBhY2VYQ29sb3I6IGpzb25bJ3BhY2VYQ29sb3InXSBhcyBpbnQ/LAp9Owp9CgpjbGFzcyBOb3Rlc1N0b3JlIGV4dGVuZHMgQ2hhbmdlTm90aWZpZXIgewogIHN0YXRpYyBjb25zdCBfcHJlZnNLZXkgPSAnbm90ZXNfdjFfY29sb3JzJzsKICBmaW5hbCBMaXN0PE5vdGU+IF9pdGVtcyA9IFtdOwogIGJvb2wgX2xvYWRlZCA9IGZhbHNlOwoKICBMaXN0PE5vdGU+IGdldCBpdGVtcyA9PiBMaXN0LnVubW9kaWZpYWJsZShfaXRlbXMpOwogIGJvb2wgZ2V0IGlzTG9hZGVkID0+IF9sb2FkZWQ7CgogIEZ1dHVyZTx2b2lkPiBsb2FkKCkgYXN5bmMgewogICAgZmluYWwgcHJlZnMgPSBhd2FpdCBTaGFyZWRQcmVmZXJlbmNlcy5nZXRJbnN0YW5jZSgpOwogICAgZmluYWwgcmF3ID0gcHJlZnMuZ2V0U3RyaW5nKF9wcmVmcyBLZXkpOwogICAgaWYgKHJhdyAhPSBudWxsKSB7CiAgICAgIGZpbmFsIGRlY29kZWQgPSAoanNvbkRlY29kZShyYXcpIGFzIExpc3QpCiAgICAgICAgICAuY2FzdDxNYXA8U3RyaW5nLCBkeW5hbWljPj4oKQogICAgICAgICAgLm1hcChOb3RlLmZyb21Kc29uKQogICAgICAgICAgLnRvTGlzdCgpOwogICAgICBfaXRlbXMKICAgICAgICAuLi5jbGVhcigpCiAgICAgICAgLi4uYWRkQWxsKGRlY29kZWQpOwogICAgfQogICAgX2xvYWRlZCA9IHRydWU7CiAgICBub3RpZnlMaXN0ZW5lcnMoKTsKICB9CgogIEZ1dHVyZTx2b2lkPiBfcGVyc2lzdCgpIGFzeW5jIHsKICAgIGZpbmFsIHByZWZzID0gYXdhaXQgU2hhcmVkUHJlZmVyZW5jZXMuZ2V0SW5zdGFuY2UoKTsKICAgIGZpbmFsIHJhdyA9IGpzb25FbmNvZGUoX2l0ZW1zLm1hcCgoZSkgPT4gZS50b0pzb24oKSkuVG9MaXN0KCkpOwogICAgYXdhaXQgcHJlZnMuc2V0U3RyaW5nKF9wcmVmcyBLZXksIHJhdyk7CiAgfQoKICBGdXR1cmU8dm9pZD4gYWRkKE5vdGUgbm90ZSkgYXN5bmMgewogICAgX2l0ZW1zLmFkZChub3RlKTsKICAgIGF3YWl0IF9wZXJzaXN0KCk7CiAgICBub3RpZnlMaXN0ZW5lcnMoKTsKICB9CgogIEZ1dHVyZTx2b2lkPiB1cGRhdGUoTm90ZSBub3RlKSBhc3luYyB7CiAgICBmaW5hbCBpZHggPSBfaXRlbXMuaW5kZXhXaGVyZSgobikgPT4gbi5pZCA9PSBub3RlLmlkKTsKICAgIGlmIChpZHggIT0gLTEpIHsKICAgICAgX2l0ZW1zW2lkeF0gPSBub3RlLmNvcHlXaXRoKHVwZGF0ZWRBdDogRGF0ZVRpbWUubm93KCkpOwogICAgICBhd2FpdCBfcGVyc2lzdCgpOwogICAgICBub3RpZnlMaXN0ZW5lcnMoKTsKICAgIH0KICB9CgogIEZ1dHVyZTx2b2lkPiByZW1vdmUoU3RyaW5nIGlkKSBhc3luYyB7CiAgICBfaXRlbXMucmVtb3ZlV2hlcmUoKG4pID0+IG4uaWQgPT0gaWQpOwogICAgYXdhaXQgX3BlcnNpc3QoKTsKICAgIG5vdGlmeUxpc3RlbmVycygpOwogIH0KCiAgRnV0dXJlPHZvaWQ+IHRvZ2dsZVBpbigpIGFzeW5jIHsKICAgIGZpbmFsIGlkeCA9IF9pdGVtcy5pbmRleFdoZXJlKChuKSA9PiBuLmlkID09IGlkKTsKICAgIGlmIChpZHggIT0gLTEpIHsKICAgICAgZmluYWwgbj0gX2l0ZW1zW2lkeF07CiAgICAgIF9pdGVtc1tpZHhdID0gbi5jb3B5V2l0aChwaW5uZWQ6ICFuLnBpbm5lZCwgdXBkYXRlZEF0OiBEYXRlVGltZS5ub3coKSk7CiAgICAgIGF3YWl0IF9wZXJzaXN0KCk7CiAgICAgIG5vdGlmeUxpc3RlbmVycygpOwogICAgfQogIH0KfQoKY2xhc3MgTm90ZXNIb21lUGFnZSBleHRlbmRzIFN0YXRlZnVsV2lkZ2V0IHsKICBjb25zdC
-}}
-B64
-          base64 -d lib/main.dart.b64 > lib/main.dart
-          rm -f lib/main.dart.b64
+          RAW_URL="https://raw.githubusercontent.com/v78582514-blip/notes_app_clean/main/main_template.dart"
+          echo "Downloading: $RAW_URL"
+          # -f: fail on HTTP errors, -L: follow redirects, --retry to be resilient
+          curl -fL --retry 3 --retry-delay 2 "$RAW_URL" -o lib/main.dart
 
-          echo "== HEAD of lib/main.dart (first 40 lines) =="
-          sed -n '1,40p' lib/main.dart
+          echo "== HEAD of lib/main.dart =="
+          sed -n '1,60p' lib/main.dart
 
-          # Валидация: это точно код Заметок, а не шаблон-счётчик
+          # Валидация: точно не шаблон-счётчик
           if grep -qi "class NotesApp" lib/main.dart && grep -qi "class NotesHomePage" lib/main.dart; then
             echo "✅ Notes code detected."
           else
-            echo "❌ Notes markers not found (class NotesApp/NotesHomePage)."; exit 1
+            echo "❌ Notes markers not found (class NotesApp/NotesHomePage)."
+            exit 1
           fi
           if grep -qiE "Counter|MyHomePage" lib/main.dart; then
-            echo "❌ Counter template strings found. Aborting."; exit 1
+            echo "❌ Counter template strings found. Aborting."
+            exit 1
           fi
 
       - name: Install dependencies
