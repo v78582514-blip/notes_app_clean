@@ -5,7 +5,7 @@ workflows:
     environment:
       flutter: stable
       vars:
-        APP_NAME: Notes
+        APP_NAME: notes
         PACKAGE_NAME: com.example.notes
     scripts:
       - name: Create/overwrite Flutter project
@@ -30,7 +30,7 @@ workflows:
     environment:
       flutter: stable
       vars:
-        APP_NAME: Notes
+        APP_NAME: notes
         PACKAGE_NAME: com.example.notes
     scripts:
       - name: Create & use repo code
