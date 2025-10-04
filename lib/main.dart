@@ -21,7 +21,6 @@ class NotesApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: scheme,
-        cardTheme: CardThemeData(
           elevation: 2,
           shadowColor: scheme.primary.withOpacity(.15),
           surfaceTintColor: Colors.transparent,
