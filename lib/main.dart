@@ -1,32 +1,42 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const NotesApp());
+  FlutterError.onError = (details) => FlutterError.presentError(details);
+  runZonedGuarded(() => runApp(const NotesApp()), (e, s) {});
 }
 
 class NotesApp extends StatelessWidget {
   const NotesApp({super.key});
-
   @override
   Widget build(BuildContext context) {
+    final scheme = ColorScheme.fromSeed(seedColor: Colors.indigo);
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Заметки',
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        colorScheme: scheme,
+        // ✅ Ваша среда ждёт CardThemeData, не CardTheme
+        cardTheme: CardThemeData(
+          elevation: 2,
+          shadowColor: scheme.primary.withOpacity(.15),
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        ),
         inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
       ),
       darkTheme: ThemeData.dark(useMaterial3: true),
-      themeMode: ThemeMode.system,
       home: const NotesHomePage(),
     );
   }
 }
 
+/* ===================== MODEL ===================== */
 class Note {
   String id;
   String text;
@@ -81,10 +91,10 @@ class Note {
 
   static Note fromJson(Map<String, dynamic> json) => Note(
         id: json['id'] as String,
-        text: json['text'] as String,
+        text: (json['text'] ?? '') as String,
         createdAt: DateTime.fromMillisecondsSinceEpoch(json['createdAt'] as int),
         updatedAt: DateTime.fromMillisecondsSinceEpoch(json['updatedAt'] as int),
-        pinned: json['pinned'] as bool? ?? false,
+        pinned: (json['pinned'] ?? false) as bool,
         colorHex: json['colorHex'] as int?,
       );
 }
@@ -93,30 +103,57 @@ class NotesStore extends ChangeNotifier {
   static const _prefsKey = 'notes_v1_colors';
   final List<Note> _items = [];
   bool _loaded = false;
+  String? _error;
 
   List<Note> get items => List.unmodifiable(_items);
   bool get isLoaded => _loaded;
+  String? get lastError => _error;
 
   Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_prefsKey);
-    if (raw != null) {
-      final decoded = (jsonDecode(raw) as List)
-          .cast<Map<String, dynamic>>()
-          .map(Note.fromJson)
-          .toList();
-      _items
-        ..clear()
-        ..addAll(decoded);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefsKey);
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          final list = decoded
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .map(Note.fromJson)
+              .toList();
+          _items
+            ..clear()
+            ..addAll(list);
+        } else {
+          await prefs.remove(_prefsKey);
+        }
+      }
+      if (_items.isEmpty) {
+        _items.add(Note(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          text: '👋 Добро пожаловать!\nСоздайте свою первую заметку.',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          colorHex: const Color(0xFF64B5F6).value,
+        ));
+        await _persist();
+      }
+    } catch (e) {
+      _error = 'Ошибка загрузки: $e';
+    } finally {
+      _loaded = true;
+      notifyListeners();
     }
-    _loaded = true;
-    notifyListeners();
   }
 
   Future<void> _persist() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = jsonEncode(_items.map((e) => e.toJson()).toList());
-    await prefs.setString(_prefsKey, raw);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = jsonEncode(_items.map((e) => e.toJson()).toList());
+      await prefs.setString(_prefsKey, raw);
+    } catch (e) {
+      _error = 'Ошибка сохранения: $e';
+      notifyListeners();
+    }
   }
 
   Future<void> add(Note note) async {
@@ -151,6 +188,7 @@ class NotesStore extends ChangeNotifier {
   }
 }
 
+/* ===================== UI ===================== */
 class NotesHomePage extends StatefulWidget {
   const NotesHomePage({super.key});
   @override
@@ -159,8 +197,9 @@ class NotesHomePage extends StatefulWidget {
 
 class _NotesHomePageState extends State<NotesHomePage> {
   final store = NotesStore();
-  bool searching = false;
   final _searchCtrl = TextEditingController();
+  bool _searching = false;
+  bool _grid = false;
 
   @override
   void initState() {
@@ -176,88 +215,83 @@ class _NotesHomePageState extends State<NotesHomePage> {
     super.dispose();
   }
 
-  List<Note> get _visibleNotes {
+  List<Note> get _filtered {
     final q = _searchCtrl.text.trim().toLowerCase();
-    final filtered = q.isEmpty
-        ? store.items
-        : store.items.where((n) => n.text.toLowerCase().contains(q)).toList();
-    filtered.sort((a, b) {
+    final base = List<Note>.from(store.items);
+    final list = q.isEmpty ? base : base.where((n) => n.text.toLowerCase().contains(q)).toList();
+    list.sort((a, b) {
       if (a.pinned != b.pinned) return b.pinned ? 1 : -1;
       return b.updatedAt.compareTo(a.updatedAt);
     });
-    return filtered;
+    return list;
   }
 
-  Future<void> _openEditor({Note? source}) async {
-    final created = await showModalBottomSheet<Note>(
+  Iterable<Note> get _pinned => _filtered.where((n) => n.pinned);
+  Iterable<Note> get _others => _filtered.where((n) => !n.pinned);
+
+  Future<void> _edit({Note? src}) async {
+    final result = await showModalBottomSheet<Note>(
       context: context,
-      isScrollControlled: true,
       showDragHandle: true,
-      builder: (ctx) => NoteEditor(note: source),
+      isScrollControlled: true,
+      builder: (_) => NoteEditor(note: src),
     );
-    if (created == null) return;
-    if (source == null) {
-      await store.add(created);
+    if (result == null) return;
+    if (src == null) {
+      await store.add(result);
     } else {
-      await store.update(created);
+      await store.update(result);
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Сохранено')));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final notes = _visibleNotes;
+    final loaded = store.isLoaded;
+    final err = store.lastError;
 
     return Scaffold(
       appBar: AppBar(
-        title: searching
+        title: _searching
             ? TextField(
                 controller: _searchCtrl,
                 autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: 'Поиск заметок…',
-                  isDense: true,
-                ),
+                decoration: const InputDecoration(hintText: 'Поиск…', isDense: true),
                 onChanged: (_) => setState(() {}),
               )
             : const Text('Заметки'),
         actions: [
           IconButton(
-            tooltip: searching ? 'Закрыть поиск' : 'Поиск',
-            onPressed: () {
-              setState(() {
-                searching = !searching;
-                if (!searching) _searchCtrl.clear();
-              });
-            },
-            icon: Icon(searching ? Icons.close : Icons.search),
-          )
+            tooltip: _searching ? 'Закрыть поиск' : 'Поиск',
+            onPressed: () => setState(() {
+              _searching = !_searching;
+              if (!_searching) _searchCtrl.clear();
+            }),
+            icon: Icon(_searching ? Icons.close : Icons.search),
+          ),
+          IconButton(
+            tooltip: _grid ? 'Список' : 'Сетка',
+            onPressed: () => setState(() => _grid = !_grid),
+            icon: Icon(_grid ? Icons.view_agenda_outlined : Icons.grid_view_rounded),
+          ),
         ],
       ),
-      body: !store.isLoaded
+      body: !loaded
           ? const Center(child: CircularProgressIndicator())
-          : notes.isEmpty
-              ? const _EmptyState()
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  itemCount: notes.length,
-                  itemBuilder: (context, i) {
-                    final n = notes[i];
-                    return Dismissible(
-                      key: ValueKey(n.id),
-                      background: _swipeBg(context, left: true),
-                      secondaryBackground: _swipeBg(context, left: false),
-                      onDismissed: (_) => store.remove(n.id),
-                      child: _NoteTile(
-                        note: n,
-                        onEdit: () => _openEditor(source: n),
-                        onTogglePin: () => store.togglePin(n.id),
-                        onDelete: () => store.remove(n.id),
-                      ),
-                    );
-                  },
+          : err != null
+              ? _ErrorPane(err: err, onReset: () => setState(() => store.load()))
+              : _Content(
+                  grid: _grid,
+                  pinned: _pinned.toList(),
+                  others: _others.toList(),
+                  onOpen: (n) => _edit(src: n),
+                  onDelete: (id) => store.remove(id),
+                  onTogglePin: (id) => store.togglePin(id),
                 ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openEditor(),
+        onPressed: () => _edit(),
         icon: const Icon(Icons.add),
         label: const Text('Новая'),
       ),
@@ -265,123 +299,273 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 }
 
-Widget _swipeBg(BuildContext context, {required bool left}) => Container(
-  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-  decoration: BoxDecoration(
-    color: Theme.of(context).colorScheme.errorContainer,
-    borderRadius: BorderRadius.circular(16),
-  ),
-  alignment: left ? Alignment.centerLeft : Alignment.centerRight,
-  padding: EdgeInsets.only(left: left ? 24 : 0, right: left ? 0 : 24),
-  child: const Icon(Icons.delete),
-);
+/* ==== CONTENT with sections & grid/list ==== */
+class _Content extends StatelessWidget {
+  final bool grid;
+  final List<Note> pinned;
+  final List<Note> others;
+  final void Function(Note) onOpen;
+  final void Function(String) onDelete;
+  final void Function(String) onTogglePin;
 
-class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+  const _Content({
+    required this.grid,
+    required this.pinned,
+    required this.others,
+    required this.onOpen,
+    required this.onDelete,
+    required this.onTogglePin,
+  });
+
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+    // ✅ важно: логический оператор — только && (не русская «и»)
+    if (pinned.isEmpty && others.isEmpty) return const _EmptyState();
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.only(bottom: 100),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (pinned.isNotEmpty) ...[
+            const _SectionHeader(title: 'Закреплённые'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: grid
+                  ? _NotesGrid(notes: pinned, onOpen: onOpen, onDelete: onDelete, onTogglePin: onTogglePin)
+                  : _NotesList(notes: pinned, onOpen: onOpen, onDelete: onDelete, onTogglePin: onTogglePin),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (others.isNotEmpty) ...[
+            const _SectionHeader(title: 'Остальные'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: grid
+                  ? _NotesGrid(notes: others, onOpen: onOpen, onDelete: onDelete, onTogglePin: onTogglePin)
+                  : _NotesList(notes: others, onOpen: onOpen, onDelete: onDelete, onTogglePin: onTogglePin),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  const _SectionHeader({required this.title});
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
+/* ==== LIST MODE ==== */
+class _NotesList extends StatelessWidget {
+  final List<Note> notes;
+  final void Function(Note) onOpen;
+  final void Function(String) onDelete;
+  final void Function(String) onTogglePin;
+
+  const _NotesList({required this.notes, required this.onOpen, required this.onDelete, required this.onTogglePin});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      itemCount: notes.length,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemBuilder: (c, i) => _NoteCard(
+        note: notes[i],
+        layout: _CardLayout.list,
+        onOpen: onOpen,
+        onDelete: onDelete,
+        onTogglePin: onTogglePin,
+      ),
+    );
+  }
+}
+
+/* ==== GRID MODE ==== */
+class _NotesGrid extends StatelessWidget {
+  final List<Note> notes;
+  final void Function(Note) onOpen;
+  final void Function(String) onDelete;
+  final void Function(String) onTogglePin;
+
+  const _NotesGrid({required this.notes, required this.onOpen, required this.onDelete, required this.onTogglePin});
+
+  @override
+  Widget build(BuildContext context) {
+    final w = MediaQuery.sizeOf(context).width;
+    final cross = w > 720 ? 3 : 2;
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: notes.length,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: cross,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+        childAspectRatio: 0.95,
+      ),
+      itemBuilder: (c, i) => _NoteCard(
+        note: notes[i],
+        layout: _CardLayout.grid,
+        onOpen: onOpen,
+        onDelete: onDelete,
+        onTogglePin: onTogglePin,
+      ),
+    );
+  }
+}
+
+/* ==== CARD ==== */
+enum _CardLayout { list, grid }
+
+class _NoteCard extends StatelessWidget {
+  final Note note;
+  final _CardLayout layout;
+  final void Function(Note) onOpen;
+  final void Function(String) onDelete;
+  final void Function(String) onTogglePin;
+
+  const _NoteCard({
+    required this.note,
+    required this.layout,
+    required this.onOpen,
+    required this.onDelete,
+    required this.onTogglePin,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = note.colorHex != null ? Color(note.colorHex!) : null;
+    final updated = _formatDate(note.updatedAt);
+
+    Widget actionsBar = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: note.pinned ? 'Открепить' : 'Закрепить',
+          icon: Icon(note.pinned ? Icons.push_pin : Icons.push_pin_outlined),
+          onPressed: () => onTogglePin(note.id),
+        ),
+        IconButton(
+          tooltip: 'Удалить',
+          icon: const Icon(Icons.delete_outline),
+          onPressed: () => onDelete(note.id),
+        ),
+      ],
+    );
+
+    final card = Card(
+      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => onOpen(note),
+        onLongPress: () async {
+          final action = await showModalBottomSheet<String>(
+            context: context,
+            showDragHandle: true,
+            builder: (ctx) => SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.copy),
+                    title: const Text('Копировать текст'),
+                    onTap: () => Navigator.pop(ctx, 'copy'),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.delete_outline),
+                    title: const Text('Удалить'),
+                    onTap: () => Navigator.pop(ctx, 'delete'),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+          );
+          if (action == 'copy') {
+            await Clipboard.setData(ClipboardData(text: note.text));
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Текст скопирован')));
+            }
+          } else if (action == 'delete') {
+            onDelete(note.id);
+          }
+        },
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Icon(Icons.note_alt_outlined, size: 72),
-            const SizedBox(height: 16),
-            const Text('Нет заметок', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            Text('Нажми «Новая», чтобы создать первую запись.',
-                style: Theme.of(context).textTheme.bodyMedium, textAlign: TextAlign.center),
+            // Цветная полоска
+            Container(
+              width: 6,
+              decoration: BoxDecoration(
+                color: color ?? Colors.transparent,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(18),
+                  bottomLeft: Radius.circular(18),
+                ),
+              ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Заголовок
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _firstLine(note.text).isEmpty ? 'Без названия' : _firstLine(note.text),
+                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (layout == _CardLayout.list) actionsBar,
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    // Превью
+                    Text(
+                      _restText(note.text),
+                      maxLines: layout == _CardLayout.grid ? 6 : 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 10),
+                    // Метаданные
+                    Row(
+                      children: [
+                        Icon(Icons.access_time, size: 14, color: Theme.of(context).textTheme.bodySmall?.color),
+                        const SizedBox(width: 6),
+                        Text('Обновлено: $updated', style: Theme.of(context).textTheme.bodySmall),
+                        const Spacer(),
+                        if (layout == _CardLayout.grid) actionsBar,
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
+
+    return card;
   }
 }
 
-class _NoteTile extends StatelessWidget {
-  final Note note;
-  final VoidCallback onEdit;
-  final VoidCallback onTogglePin;
-  final VoidCallback onDelete;
-  const _NoteTile({required this.note, required this.onEdit, required this.onTogglePin, required this.onDelete});
-
-  @override
-  Widget build(BuildContext context) {
-    final updated = _formatDate(note.updatedAt);
-    final color = note.colorHex != null ? Color(note.colorHex!) : null;
-
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: InkWell(
-        onTap: onEdit,
-        borderRadius: BorderRadius.circular(16),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Container(
-            width: 6,
-            decoration: BoxDecoration(
-              color: color ?? Colors.transparent,
-              borderRadius: const BorderRadius.only(topLeft: Radius.circular(16), bottomLeft: Radius.circular(16)),
-            ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                if (note.pinned)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 4.0, right: 8),
-                    child: Icon(Icons.push_pin, size: 18),
-                  ),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: [
-                      Expanded(
-                        child: Text(
-                          _firstLine(note.text).isEmpty ? 'Без названия' : _firstLine(note.text),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-                        ),
-                      ),
-                      if (color != null)
-                        Container(
-                          width: 14, height: 14, margin: const EdgeInsets.only(left: 8),
-                          decoration: BoxDecoration(
-                            color: color, shape: BoxShape.circle,
-                            border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-                          ),
-                        ),
-                    ]),
-                    const SizedBox(height: 6),
-                    Text(_restText(note.text), maxLines: 3, overflow: TextOverflow.ellipsis),
-                    const SizedBox(height: 8),
-                    Row(children: [
-                      Icon(Icons.access_time, size: 14, color: Theme.of(context).textTheme.bodySmall?.color),
-                      const SizedBox(width: 4),
-                      Text('Обновлено: $updated', style: Theme.of(context).textTheme.bodySmall),
-                    ]),
-                  ]),
-                ),
-                const SizedBox(width: 8),
-                Column(children: [
-                  IconButton(
-                    tooltip: note.pinned ? 'Открепить' : 'Закрепить',
-                    onPressed: onTogglePin,
-                    icon: Icon(note.pinned ? Icons.push_pin : Icons.push_pin_outlined),
-                  ),
-                  IconButton(tooltip: 'Удалить', onPressed: onDelete, icon: const Icon(Icons.delete_outline)),
-                ]),
-              ]),
-            ),
-          ),
-        ]),
-      ),
-    );
-  }
-}
-
+/* ==== Editor ==== */
 class NoteEditor extends StatefulWidget {
   final Note? note;
   const NoteEditor({super.key, this.note});
@@ -437,8 +621,7 @@ class _NoteEditorState extends State<NoteEditor> {
         Align(
           alignment: Alignment.centerLeft,
           child: Wrap(
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: 8, runSpacing: 8,
+            spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               _ColorDot(
                 color: null,
@@ -468,8 +651,10 @@ class _NoteEditorState extends State<NoteEditor> {
                 final raw = _ctrl.text.trim();
                 final text = raw.isEmpty ? '' : raw;
                 final note = (widget.note ?? Note.newNote()).copyWith(
-                  text: text, updatedAt: DateTime.now(),
-                  colorHex: _selectedColor?.value, keepNullColor: _selectedColor == null,
+                  text: text,
+                  updatedAt: DateTime.now(),
+                  colorHex: _selectedColor?.value,
+                  keepNullColor: _selectedColor == null,
                 );
                 Navigator.of(context).pop(note);
               },
@@ -489,6 +674,7 @@ class _NoteEditorState extends State<NoteEditor> {
   }
 }
 
+/* ==== Small widgets & utils ==== */
 class _ColorDot extends StatelessWidget {
   final Color? color;
   final bool selected;
@@ -500,12 +686,15 @@ class _ColorDot extends StatelessWidget {
   Widget build(BuildContext context) {
     final borderColor = Theme.of(context).colorScheme.outlineVariant;
     return InkWell(
-      onTap: onTap, borderRadius: BorderRadius.circular(999),
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Container(
-          width: 28, height: 28,
+          width: 28,
+          height: 28,
           decoration: BoxDecoration(
-            color: color ?? Colors.transparent, shape: BoxShape.circle,
+            color: color ?? Colors.transparent,
+            shape: BoxShape.circle,
             border: Border.all(
               color: selected ? Theme.of(context).colorScheme.primary : borderColor,
               width: selected ? 2 : 1,
@@ -522,6 +711,30 @@ class _ColorDot extends StatelessWidget {
   }
 }
 
+class _ErrorPane extends StatelessWidget {
+  final String err;
+  final VoidCallback onReset;
+  const _ErrorPane({required this.err, required this.onReset});
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline, size: 48),
+            const SizedBox(height: 12),
+            Text(err, textAlign: TextAlign.center),
+            const SizedBox(height: 12),
+            FilledButton(onPressed: onReset, child: const Text('Повторить')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 List<Color> _palette() => const [
   Color(0xFFE57373), Color(0xFFF06292), Color(0xFFBA68C8), Color(0xFF9575CD),
   Color(0xFF7986CB), Color(0xFF64B5F6), Color(0xFF4FC3F7), Color(0xFF4DD0E1),
@@ -530,18 +743,20 @@ List<Color> _palette() => const [
   Color(0xFFA1887F), Color(0xFF90A4AE),
 ];
 
-String _firstLine(String text) {
-  final lines = text.trim().split('\n');
-  return lines.isEmpty ? '' : lines.first.trim();
+String _firstLine(String t) {
+  final ls = t.trim().split('\n');
+  return ls.isEmpty ? '' : ls.first.trim();
 }
-String _restText(String text) {
-  final lines = text.trim().split('\n');
-  if (lines.length <= 1) return '';
-  return lines.skip(1).join('\n').trim();
+
+String _restText(String t) {
+  final ls = t.trim().split('\n');
+  if (ls.length <= 1) return '';
+  return ls.skip(1).join('\n').trim();
 }
+
 String _pad(int n) => n.toString().padLeft(2, '0');
 String _formatDate(DateTime dt) {
   final now = DateTime.now();
-  final isToday = dt.year == now.year && dt.month == now.month && dt.day == now.day;
-  return isToday ? '${_pad(dt.hour)}:${_pad(dt.minute)}' : '${_pad(dt.day)}.${_pad(dt.month)}.${dt.year}';
+  final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
+  return sameDay ? '${_pad(dt.hour)}:${_pad(dt.minute)}' : '${_pad(dt.day)}.${_pad(dt.month)}.${dt.year}';
 }
