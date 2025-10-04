@@ -21,10 +21,7 @@ class NotesApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: scheme,
-        // Без кастомного cardTheme — чтобы не было конфликтов версий Flutter
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-        ),
+        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
       ),
       darkTheme: ThemeData.dark(useMaterial3: true),
       home: const NotesHomePage(),
@@ -315,7 +312,6 @@ class _Content extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Важно: оператор И — && ; и _EmptyState существует ниже
     if (pinned.isEmpty && others.isEmpty) return const _EmptyState();
 
     return SingleChildScrollView(
@@ -360,7 +356,7 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-/* ==== LIST MODE ==== */
+/* ==== LIST MODE (fixed Column) ==== */
 class _NotesList extends StatelessWidget {
   final List<Note> notes;
   final void Function(Note) onOpen;
@@ -371,17 +367,20 @@ class _NotesList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView.builder(
-      itemCount: notes.length,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemBuilder: (c, i) => _NoteCard(
-        note: notes[i],
-        layout: _CardLayout.list,
-        onOpen: onOpen,
-        onDelete: onDelete,
-        onTogglePin: onTogglePin,
-      ),
+    // Внутри SingleChildScrollView безопаснее рисовать Column, а не ListView.
+    return Column(
+      children: [
+        for (int i = 0; i < notes.length; i++) ...[
+          _NoteCard(
+            note: notes[i],
+            layout: _CardLayout.list,
+            onOpen: onOpen,
+            onDelete: onDelete,
+            onTogglePin: onTogglePin,
+          ),
+          if (i != notes.length - 1) const Divider(height: 1),
+        ],
+      ],
     );
   }
 }
