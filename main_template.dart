@@ -21,11 +21,7 @@ class NotesApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: scheme,
-          elevation: 2,
-          shadowColor: scheme.primary.withOpacity(.15),
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        ),
+        // ⛑ Убрали кастомизацию cardTheme, чтобы не конфликтовать с вашей версией Flutter
         inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
       ),
       darkTheme: ThemeData.dark(useMaterial3: true),
@@ -126,7 +122,6 @@ class NotesStore extends ChangeNotifier {
         }
       }
       if (_items.isEmpty) {
-        // Первая заметка для пустого состояния
         _items.add(Note(
           id: DateTime.now().microsecondsSinceEpoch.toString(),
           text: '👋 Добро пожаловать!\nСоздайте свою первую заметку.',
@@ -216,7 +211,7 @@ class _NotesHomePageState extends State<NotesHomePage> {
 
   List<Note> get _filtered {
     final q = _searchCtrl.text.trim().toLowerCase();
-    final base = List<Note>.from(store.items); // копия (не трогаем unmodifiable)
+    final base = List<Note>.from(store.items);
     final list = q.isEmpty ? base : base.where((n) => n.text.toLowerCase().contains(q)).toList();
     list.sort((a, b) {
       if (a.pinned != b.pinned) return b.pinned ? 1 : -1;
@@ -318,9 +313,9 @@ class _Content extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (pinned.isEmpty && others.isEmpty) return const _EmptyState();
+    // ✅ важный фикс: только `&&` (и убрали const у _EmptyState)
+    if (pinned.isEmpty && others.isEmpty) return _EmptyState();
 
-    // Используем один прокручиваемый список и вкладываем внутрь Grid/List с shrinkWrap
     return SingleChildScrollView(
       padding: const EdgeInsets.only(bottom: 100),
       child: Column(
@@ -331,18 +326,8 @@ class _Content extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: grid
-                  ? _NotesGrid(
-                      notes: pinned,
-                      onOpen: onOpen,
-                      onDelete: onDelete,
-                      onTogglePin: onTogglePin,
-                    )
-                  : _NotesList(
-                      notes: pinned,
-                      onOpen: onOpen,
-                      onDelete: onDelete,
-                      onTogglePin: onTogglePin,
-                    ),
+                  ? _NotesGrid(notes: pinned, onOpen: onOpen, onDelete: onDelete, onTogglePin: onTogglePin)
+                  : _NotesList(notes: pinned, onOpen: onOpen, onDelete: onDelete, onTogglePin: onTogglePin),
             ),
             const SizedBox(height: 12),
           ],
@@ -351,18 +336,8 @@ class _Content extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: grid
-                  ? _NotesGrid(
-                      notes: others,
-                      onOpen: onOpen,
-                      onDelete: onDelete,
-                      onTogglePin: onTogglePin,
-                    )
-                  : _NotesList(
-                      notes: others,
-                      onOpen: onOpen,
-                      onDelete: onDelete,
-                      onTogglePin: onTogglePin,
-                    ),
+                  ? _NotesGrid(notes: others, onOpen: onOpen, onDelete: onDelete, onTogglePin: onTogglePin)
+                  : _NotesList(notes: others, onOpen: onOpen, onDelete: onDelete, onTogglePin: onTogglePin),
             ),
           ],
         ],
@@ -519,77 +494,67 @@ class _NoteCard extends StatelessWidget {
             onDelete(note.id);
           }
         },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Цветная полоска
-              Container(
-                width: 6,
-                decoration: BoxDecoration(
-                  color: color ?? Colors.transparent,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(18),
-                    bottomLeft: Radius.circular(18),
-                  ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Цветная полоска
+            Container(
+              width: 6,
+              decoration: BoxDecoration(
+                color: color ?? Colors.transparent,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(18),
+                  bottomLeft: Radius.circular(18),
                 ),
               ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Заголовок
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              _firstLine(note.text).isEmpty ? 'Без названия' : _firstLine(note.text),
-                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Заголовок
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _firstLine(note.text).isEmpty ? 'Без названия' : _firstLine(note.text),
+                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          if (layout == _CardLayout.list) actionsBar,
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      // Превью
-                      Text(
-                        _restText(note.text),
-                        maxLines: layout == _CardLayout.grid ? 6 : 3,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 10),
-                      // Метаданные
-                      Row(
-                        children: [
-                          Icon(Icons.access_time, size: 14, color: Theme.of(context).textTheme.bodySmall?.color),
-                          const SizedBox(width: 6),
-                          Text('Обновлено: $updated', style: Theme.of(context).textTheme.bodySmall),
-                          const Spacer(),
-                          if (layout == _CardLayout.grid) actionsBar,
-                        ],
-                      ),
-                    ],
-                  ),
+                        ),
+                        if (layout == _CardLayout.list) actionsBar,
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    // Превью
+                    Text(
+                      _restText(note.text),
+                      maxLines: layout == _CardLayout.grid ? 6 : 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 10),
+                    // Метаданные
+                    Row(
+                      children: [
+                        Icon(Icons.access_time, size: 14, color: Theme.of(context).textTheme.bodySmall?.color),
+                        const SizedBox(width: 6),
+                        Text('Обновлено: $updated', style: Theme.of(context).textTheme.bodySmall),
+                        const Spacer(),
+                        if (layout == _CardLayout.grid) actionsBar,
+                      ],
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
 
-    if (layout == _CardLayout.grid) {
-      return card;
-    }
     return card;
   }
 }
