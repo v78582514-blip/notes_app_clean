@@ -3,13 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  WidgetsFlutterBinding.ensureInitialized();
+  // Поймаем любые ошибки фреймворка и покажем их на экране вместо “белого”.
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+  };
   runApp(const NotesApp());
 }
 
 class NotesApp extends StatelessWidget {
   const NotesApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -81,10 +83,10 @@ class Note {
 
   static Note fromJson(Map<String, dynamic> json) => Note(
         id: json['id'] as String,
-        text: json['text'] as String,
+        text: (json['text'] ?? '') as String,
         createdAt: DateTime.fromMillisecondsSinceEpoch(json['createdAt'] as int),
         updatedAt: DateTime.fromMillisecondsSinceEpoch(json['updatedAt'] as int),
-        pinned: json['pinned'] as bool? ?? false,
+        pinned: (json['pinned'] ?? false) as bool,
         colorHex: json['colorHex'] as int?,
       );
 }
@@ -93,30 +95,51 @@ class NotesStore extends ChangeNotifier {
   static const _prefsKey = 'notes_v1_colors';
   final List<Note> _items = [];
   bool _loaded = false;
+  String? _error;
 
   List<Note> get items => List.unmodifiable(_items);
   bool get isLoaded => _loaded;
+  String? get lastError => _error;
 
   Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_prefsKey);
-    if (raw != null) {
-      final decoded = (jsonDecode(raw) as List)
-          .cast<Map<String, dynamic>>()
-          .map(Note.fromJson)
-          .toList();
-      _items
-        ..clear()
-        ..addAll(decoded);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefsKey);
+
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          final list = decoded
+              .cast<Map>()
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .map(Note.fromJson)
+              .toList();
+          _items
+            ..clear()
+            ..addAll(list);
+        } else {
+          // если вдруг лежит не список — игнорируем и очищаем
+          await prefs.remove(_prefsKey);
+        }
+      }
+    } catch (e) {
+      // не валим приложение — показываем сообщение и продолжаем с пустым списком
+      _error = 'Ошибка загрузки данных: $e';
+    } finally {
+      _loaded = true;
+      notifyListeners();
     }
-    _loaded = true;
-    notifyListeners();
   }
 
   Future<void> _persist() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = jsonEncode(_items.map((e) => e.toJson()).toList());
-    await prefs.setString(_prefsKey, raw);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = jsonEncode(_items.map((e) => e.toJson()).toList());
+      await prefs.setString(_prefsKey, raw);
+    } catch (e) {
+      _error = 'Ошибка сохранения: $e';
+      notifyListeners();
+    }
   }
 
   Future<void> add(Note note) async {
@@ -148,6 +171,14 @@ class NotesStore extends ChangeNotifier {
       await _persist();
       notifyListeners();
     }
+  }
+
+  Future<void> resetStorage() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefsKey);
+    _items.clear();
+    _error = null;
+    notifyListeners();
   }
 }
 
@@ -205,15 +236,17 @@ class _NotesHomePageState extends State<NotesHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    final notes = _visibleNotes;
-
+    // Верхняя плашка — видно даже если список пуст
     return Scaffold(
       appBar: AppBar(
         title: searching
             ? TextField(
                 controller: _searchCtrl,
                 autofocus: true,
-                decoration: const InputDecoration(hintText: 'Поиск заметок…', isDense: true),
+                decoration: const InputDecoration(
+                  hintText: 'Поиск заметок…',
+                  isDense: true,
+                ),
                 onChanged: (_) => setState(() {}),
               )
             : const Text('Заметки'),
@@ -227,37 +260,79 @@ class _NotesHomePageState extends State<NotesHomePage> {
               });
             },
             icon: Icon(searching ? Icons.close : Icons.search),
-          )
+          ),
+          // Кнопка сброса хранилища на случай битых данных
+          IconButton(
+            tooltip: 'Сбросить данные',
+            onPressed: () async {
+              await store.resetStorage();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Хранилище очищено')),
+                );
+              }
+            },
+            icon: const Icon(Icons.restore),
+          ),
         ],
       ),
-      body: !store.isLoaded
-          ? const Center(child: CircularProgressIndicator())
-          : notes.isEmpty
-              ? const _EmptyState()
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  itemCount: notes.length,
-                  itemBuilder: (context, i) {
-                    final n = notes[i];
-                    return Dismissible(
-                      key: ValueKey(n.id),
-                      background: _swipeBg(context, left: true),
-                      secondaryBackground: _swipeBg(context, left: false),
-                      onDismissed: (_) => store.remove(n.id),
-                      child: _NoteTile(
-                        note: n,
-                        onEdit: () => _openEditor(source: n),
-                        onTogglePin: () => store.togglePin(n.id),
-                        onDelete: () => store.remove(n.id),
-                      ),
-                    );
-                  },
-                ),
+      body: _buildBody(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openEditor(),
         icon: const Icon(Icons.add),
         label: const Text('Новая'),
       ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (!store.isLoaded) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (store.lastError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, size: 48),
+              const SizedBox(height: 12),
+              Text(
+                store.lastError!,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () => store.resetStorage(),
+                child: const Text('Сбросить и продолжить'),
+              )
+            ],
+          ),
+        ),
+      );
+    }
+    final notes = _visibleNotes;
+    if (notes.isEmpty) return const _EmptyState();
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: notes.length,
+      itemBuilder: (context, i) {
+        final n = notes[i];
+        return Dismissible(
+          key: ValueKey(n.id),
+          background: _swipeBg(context, left: true),
+          secondaryBackground: _swipeBg(context, left: false),
+          onDismissed: (_) => store.remove(n.id),
+          child: _NoteTile(
+            note: n,
+            onEdit: () => _openEditor(source: n),
+            onTogglePin: () => store.togglePin(n.id),
+            onDelete: () => store.remove(n.id),
+          ),
+        );
+      },
     );
   }
 }
