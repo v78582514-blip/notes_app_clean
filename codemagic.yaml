@@ -1,6 +1,6 @@
 workflows:
   debug_apk:
-    name: Debug APK (safe)
+    name: Debug APK (Notes strict)
     max_build_duration: 60
     environment:
       flutter: stable
@@ -10,26 +10,54 @@ workflows:
     scripts:
       - name: Create Flutter project
         script: |
+          set -e
           SAFE_NAME="${APP_NAME// /_}"
           SAFE_NAME="$(echo "$SAFE_NAME" | tr '[:upper:]' '[:lower:]')"
           SAFE_NAME="$(echo "$SAFE_NAME" | sed 's/[^a-z0-9_]/_/g')"
-          if [[ "$SAFE_NAME" =~ ^[0-9] ]]; then SAFE_NAME="app_$SAFE_NAME"; fi
+          [[ "$SAFE_NAME" =~ ^[0-9] ]] && SAFE_NAME="app_$SAFE_NAME"
+          echo "Using project name: $SAFE_NAME"
           flutter create --org "${PACKAGE_NAME}" --project-name "$SAFE_NAME" --overwrite .
 
-      - name: Copy main.dart
+      - name: Copy Notes main.dart (strict)
         script: |
+          set -e
           mkdir -p lib
+          if [ ! -f "$CM_SOURCE_DIR/main_template.dart" ]; then
+            echo "❌ main_template.dart NOT FOUND in repo root."; exit 1
+          fi
+
+          echo "== HEAD of main_template.dart =="
+          sed -n '1,50p' "$CM_SOURCE_DIR/main_template.dart"
+
+          # перезаписываем дефолтный счётчик:
+          rm -f lib/main.dart
           cp -f "$CM_SOURCE_DIR/main_template.dart" lib/main.dart
-          echo "== HEAD of lib/main.dart =="
-          head -n 20 lib/main.dart
+
+          echo "== HEAD of lib/main.dart (after copy) =="
+          sed -n '1,50p' lib/main.dart
+
+          # валидация: это точно код заметок, а не дефолтный шаблон
+          if grep -qi "class NotesApp" lib/main.dart && grep -qi "class NotesHomePage" lib/main.dart; then
+            echo "✅ Notes code detected."
+          else
+            echo "❌ Notes markers not found (class NotesApp/NotesHomePage)."; exit 1
+          fi
+          if grep -qiE "Counter|MyHomePage" lib/main.dart; then
+            echo "❌ Counter template strings found. Aborting."; exit 1
+          fi
 
       - name: Install dependencies
         script: |
+          set -e
           flutter pub add shared_preferences || true
           flutter pub get
 
-      - name: Build release APK
-        script: flutter build apk --release
+      - name: Build release APK (force new version)
+        script: |
+          set -e
+          BN=$(date +%s)
+          flutter clean
+          flutter build apk --release --build-number="$BN" --build-name="1.0.$BN"
 
     artifacts:
       - build/app/outputs/flutter-apk/**/*.apk
