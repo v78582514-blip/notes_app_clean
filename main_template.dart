@@ -6,20 +6,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await settings.load(); // загрузим настройки до запуска
+  await settings.load();
   FlutterError.onError = (details) => FlutterError.presentError(details);
   runZonedGuarded(() => runApp(const NotesApp()), (e, s) {});
 }
 
-/* ===================== SETTINGS (ПАНЕЛЬ УПРАВЛЕНИЯ) ===================== */
+/* ===================== SETTINGS (только тема) ===================== */
 
 final settings = SettingsStore();
 
 enum AppThemeMode { system, light, dark }
 
 class SettingsStore extends ChangeNotifier {
-  static const _k = 'settings_v1';
-  bool numberedLists = false;
+  static const _k = 'settings_v1_theme_only';
   AppThemeMode themeMode = AppThemeMode.system;
 
   Future<void> load() async {
@@ -27,7 +26,6 @@ class SettingsStore extends ChangeNotifier {
     final raw = p.getString(_k);
     if (raw != null && raw.isNotEmpty) {
       final m = Map<String, dynamic>.from(jsonDecode(raw) as Map);
-      numberedLists = (m['numbered'] ?? false) as bool;
       switch (m['theme'] as String? ?? 'system') {
         case 'light': themeMode = AppThemeMode.light; break;
         case 'dark': themeMode = AppThemeMode.dark; break;
@@ -39,7 +37,6 @@ class SettingsStore extends ChangeNotifier {
   Future<void> _save() async {
     final p = await SharedPreferences.getInstance();
     await p.setString(_k, jsonEncode({
-      'numbered': numberedLists,
       'theme': switch (themeMode) {
         AppThemeMode.light => 'light',
         AppThemeMode.dark => 'dark',
@@ -47,8 +44,6 @@ class SettingsStore extends ChangeNotifier {
       }
     }));
   }
-
-  Future<void> setNumbered(bool v) async { numberedLists = v; await _save(); notifyListeners(); }
 
   Future<void> setTheme(AppThemeMode m) async { themeMode = m; await _save(); notifyListeners(); }
 
@@ -97,6 +92,7 @@ class Note {
   DateTime updatedAt;
   int? colorHex;
   String? groupId;
+  bool numbered; // ⬅ локальная нумерация
 
   Note({
     required this.id,
@@ -105,6 +101,7 @@ class Note {
     required this.updatedAt,
     this.colorHex,
     this.groupId,
+    this.numbered = false,
   });
 
   factory Note.newNote() {
@@ -125,6 +122,7 @@ class Note {
     bool keepNullColor = false,
     String? groupId,
     bool setGroupId = false,
+    bool? numbered, // ⬅ управление локальной нумерацией
   }) =>
       Note(
         id: id,
@@ -133,6 +131,7 @@ class Note {
         updatedAt: updatedAt ?? this.updatedAt,
         colorHex: keepNullColor ? null : (colorHex ?? this.colorHex),
         groupId: setGroupId ? groupId : this.groupId,
+        numbered: numbered ?? this.numbered,
       );
 
   Map<String, dynamic> toJson() => {
@@ -142,6 +141,7 @@ class Note {
         'updatedAt': updatedAt.millisecondsSinceEpoch,
         'colorHex': colorHex,
         'groupId': groupId,
+        'numbered': numbered,
       };
 
   static Note fromJson(Map<String, dynamic> json) => Note(
@@ -151,6 +151,7 @@ class Note {
         updatedAt: DateTime.fromMillisecondsSinceEpoch(json['updatedAt'] as int),
         colorHex: json['colorHex'] as int?,
         groupId: json['groupId'] as String?,
+        numbered: (json['numbered'] as bool?) ?? false,
       );
 }
 
@@ -183,7 +184,7 @@ class Group {
 /* ===================== STORE ===================== */
 
 class NotesStore extends ChangeNotifier {
-  static const _prefsKey = 'notes_v2_grid_groups';
+  static const _prefsKey = 'notes_v3_grid_groups_local_numbering';
   final List<Note> _notes = [];
   final List<Group> _groups = [];
   bool _loaded = false;
@@ -342,7 +343,7 @@ class GridItem {
   bool get isGroup => group != null;
 }
 
-/* ===================== UI (ONLY GRID) ===================== */
+/* ===================== UI (GRID) ===================== */
 
 class NotesHomePage extends StatefulWidget {
   const NotesHomePage({super.key});
@@ -353,7 +354,7 @@ class NotesHomePage extends StatefulWidget {
 class _NotesHomePageState extends State<NotesHomePage> {
   final store = NotesStore();
   final _searchCtrl = TextEditingController();
-  bool _dragging = false; // показывать красный «угол удаления»
+  bool _dragging = false;
 
   @override
   void initState() {
@@ -456,8 +457,6 @@ class _NotesHomePageState extends State<NotesHomePage> {
     );
   }
 
-  /* ====== SETTINGS SHEET ====== */
-
   void _openSettings() {
     showModalBottomSheet<void>(
       context: context,
@@ -466,8 +465,6 @@ class _NotesHomePageState extends State<NotesHomePage> {
       builder: (_) => const SettingsSheet(),
     );
   }
-
-  /* ====== DROP HANDLERS ====== */
 
   Future<void> _handleDropOnNote(DragPayload payload, Note target) async {
     if (payload.isNote) {
@@ -510,8 +507,6 @@ class _NotesHomePageState extends State<NotesHomePage> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Удалено')));
     }
   }
-
-  /* ====== EDITORS ====== */
 
   Future<void> _openEditor({Note? source}) async {
     final result = await showModalBottomSheet<NoteActionResult>(
@@ -574,7 +569,7 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 }
 
-/* ===================== SETTINGS SHEET UI ===================== */
+/* ===================== SETTINGS SHEET (только тема) ===================== */
 
 class SettingsSheet extends StatefulWidget {
   const SettingsSheet({super.key});
@@ -584,7 +579,6 @@ class SettingsSheet extends StatefulWidget {
 
 class _SettingsSheetState extends State<SettingsSheet> {
   AppThemeMode _mode = settings.themeMode;
-  bool _numbered = settings.numberedLists;
 
   @override
   Widget build(BuildContext context) {
@@ -597,13 +591,6 @@ class _SettingsSheetState extends State<SettingsSheet> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text('Панель управления', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          SwitchListTile(
-            value: _numbered,
-            onChanged: (v) => setState(() => _numbered = v),
-            title: const Text('Нумерованные списки'),
-            subtitle: const Text('Каждая строка заметки будет отображаться как пункт 1., 2., 3.…'),
-          ),
           const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerLeft,
@@ -624,11 +611,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
             children: [
               Expanded(
                 child: FilledButton.icon(
-                  onPressed: () async {
-                    await settings.setNumbered(_numbered);
-                    await settings.setTheme(_mode);
-                    if (context.mounted) Navigator.pop(context);
-                  },
+                  onPressed: () async { await settings.setTheme(_mode); if (context.mounted) Navigator.pop(context); },
                   icon: const Icon(Icons.save), label: const Text('Сохранить'),
                 ),
               ),
@@ -737,14 +720,12 @@ class _NoteCardGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = note.colorHex != null ? Color(note.colorHex!) : null;
     final updated = _formatDate(note.updatedAt);
-
-    final textPreview = _formatPreview(note.text, numbered: settings.numberedLists);
+    final textPreview = _formatPreview(note.text, numbered: note.numbered);
 
     final card = Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
-        // копирование текста — двойной тап
         onDoubleTap: () async {
           await Clipboard.setData(ClipboardData(text: note.text));
           if (context.mounted) {
@@ -757,8 +738,7 @@ class _NoteCardGrid extends StatelessWidget {
             Row(
               children: [
                 Container(
-                  width: 14,
-                  height: 14,
+                  width: 14, height: 14,
                   decoration: BoxDecoration(
                     color: color ?? Colors.transparent,
                     shape: BoxShape.circle,
@@ -856,10 +836,7 @@ class _GroupCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
-                        _formatPreview(
-                          _firstLine(n.text).isEmpty ? 'Без названия' : _firstLine(n.text),
-                          numbered: false, // в мини-превью не нумеруем
-                        ),
+                        _firstLine(n.text).isEmpty ? 'Без названия' : _firstLine(n.text),
                         maxLines: 2, overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
@@ -911,12 +888,15 @@ class _NoteEditorState extends State<NoteEditor> {
   late final TextEditingController _ctrl;
   Color? _selectedColor;
   bool _detachFromGroup = false;
+  bool _numbered = false; // локальный переключатель
 
   @override
   void initState() {
     super.initState();
     _ctrl = TextEditingController(text: widget.note?.text ?? '');
     _selectedColor = widget.note?.colorHex != null ? Color(widget.note!.colorHex!) : null;
+    _numbered = widget.note?.numbered ?? false;
+    _ctrl.addListener(() => setState(() {})); // обновлять предпросмотр
   }
 
   @override
@@ -929,6 +909,8 @@ class _NoteEditorState extends State<NoteEditor> {
   Widget build(BuildContext context) {
     final isNew = widget.note == null;
     final inGroup = widget.note?.groupId != null;
+
+    final previewText = _formatPreview(_ctrl.text, numbered: _numbered);
 
     return Padding(
       padding: EdgeInsets.only(
@@ -953,22 +935,27 @@ class _NoteEditorState extends State<NoteEditor> {
             icon: const Icon(Icons.calendar_month),
           ),
         ]),
-        if (inGroup) ...[
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Icon(Icons.folder, size: 18),
-              const SizedBox(width: 8),
-              Expanded(child: Text('В группе', style: Theme.of(context).textTheme.bodyMedium)),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: SwitchListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                value: _numbered,
+                onChanged: (v) => setState(() => _numbered = v),
+                title: const Text('Нумерация строк'),
+              ),
+            ),
+            if (inGroup)
               TextButton.icon(
                 onPressed: () => setState(() => _detachFromGroup = !_detachFromGroup),
                 icon: Icon(_detachFromGroup ? Icons.check_box : Icons.check_box_outline_blank),
-                label: const Text('Отделить'),
+                label: const Text('Отделить от группы'),
               ),
-            ],
-          ),
-        ],
-        const SizedBox(height: 8),
+          ],
+        ),
+        const SizedBox(height: 6),
         Align(
           alignment: Alignment.centerLeft,
           child: Wrap(
@@ -989,10 +976,29 @@ class _NoteEditorState extends State<NoteEditor> {
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         TextField(
           controller: _ctrl, autofocus: true, minLines: 6, maxLines: 12,
           decoration: const InputDecoration(hintText: 'Текст заметки…'),
+        ),
+        const SizedBox(height: 10),
+        // Живой предпросмотр нумерации
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text('Предпросмотр', style: Theme.of(context).textTheme.labelLarge),
+        ),
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(.5),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            previewText.isEmpty ? '—' : previewText,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
         ),
         const SizedBox(height: 12),
         Row(children: [
@@ -1003,6 +1009,7 @@ class _NoteEditorState extends State<NoteEditor> {
                 final text = raw.isEmpty ? '' : raw;
                 var note = (widget.note ?? Note.newNote()).copyWith(
                   text: text,
+                  numbered: _numbered,
                   updatedAt: DateTime.now(),
                   colorHex: _selectedColor?.value,
                   keepNullColor: _selectedColor == null,
@@ -1164,7 +1171,7 @@ class _GroupEditorState extends State<GroupEditor> {
                       maxLines: 1, overflow: TextOverflow.ellipsis,
                     ),
                     subtitle: Text(
-                      _formatPreview(_restText(n.text), numbered: settings.numberedLists),
+                      _formatPreview(_restText(n.text), numbered: n.numbered),
                       maxLines: 1, overflow: TextOverflow.ellipsis,
                     ),
                     onTap: () async { await widget.onEditNote(n); setState(() {}); },
@@ -1229,8 +1236,7 @@ class _ColorDot extends StatelessWidget {
       borderRadius: BorderRadius.circular(999),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Container(
-          width: 28,
-          height: 28,
+          width: 28, height: 28,
           decoration: BoxDecoration(
             color: color ?? Colors.transparent,
             shape: BoxShape.circle,
@@ -1274,7 +1280,7 @@ class _ErrorPane extends StatelessWidget {
   }
 }
 
-/* ===== Текстовые утилиты (нумерация строк при отображении) ===== */
+/* ===== Текстовые утилиты (локальная нумерация) ===== */
 
 String _firstLine(String t) {
   final ls = t.trim().split('\n');
@@ -1292,7 +1298,7 @@ String _formatDate(DateTime dt) {
   return sameDay ? '${_pad(dt.hour)}:${_pad(dt.minute)}' : '${_pad(dt.day)}.${_pad(dt.month)}.${dt.year}';
 }
 
-/// Рендер превью: если [numbered] = true, добавляем "1. ", "2. " ко всем непустым строкам.
+/// Если [numbered] = true — добавляем "1. ", "2. " ко всем непустым строкам (отображение и предпросмотр).
 String _formatPreview(String text, {required bool numbered}) {
   if (!numbered) return text;
   final lines = text.split('\n');
@@ -1301,7 +1307,7 @@ String _formatPreview(String text, {required bool numbered}) {
   for (final raw in lines) {
     final s = raw.trimRight();
     if (s.isEmpty) {
-      out.add(s); // пустые строки оставляем
+      out.add(s);
     } else {
       i += 1;
       out.add('$i. $s');
