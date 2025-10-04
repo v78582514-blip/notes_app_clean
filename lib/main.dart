@@ -21,12 +21,8 @@ class NotesApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: scheme,
-          elevation: 2,
-          shadowColor: scheme.primary.withOpacity(.15),
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        ),
-        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputDecoration(borderRadius: BorderRadius.all(Radius.circular(8)))),
+        // ⛑ Убрали кастомизацию cardTheme, чтобы не конфликтовать с вашей версией Flutter
+        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
       ),
       darkTheme: ThemeData.dark(useMaterial3: true),
       home: const NotesHomePage(),
@@ -317,8 +313,8 @@ class _Content extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ✅ важно: логический оператор — только && (не русская «и»)
-    if (pinned.isEmpty && others.isEmpty) return const _EmptyState();
+    // ✅ важный фикс: только `&&` (и убрали const у _EmptyState)
+    if (pinned.isEmpty && others.isEmpty) return _EmptyState();
 
     return SingleChildScrollView(
       padding: const EdgeInsets.only(bottom: 100),
