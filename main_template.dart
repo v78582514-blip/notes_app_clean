@@ -618,7 +618,8 @@ class _NoteCardGrid extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
-        onLongPress: () async {
+        // ⬇️ КОПИРОВАНИЕ ПЕРЕНЕСЕНО НА ДВОЙНОЙ ТАП (а не long-press)
+        onDoubleTap: () async {
           await Clipboard.setData(ClipboardData(text: note.text));
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Текст скопирован')));
@@ -669,6 +670,7 @@ class _NoteCardGrid extends StatelessWidget {
       ),
     );
 
+    // Принимаем дроп (заметка/группа → на заметку)
     return DragTarget<DragPayload>(
       onWillAccept: (p) => p != null && (p.isNote || p.isGroup),
       onAccept: onAcceptDrop,
@@ -676,6 +678,7 @@ class _NoteCardGrid extends StatelessWidget {
     );
   }
 }
+
 
 class _GroupCard extends StatelessWidget {
   final Group group;
