@@ -18,9 +18,7 @@ class NotesApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-        ),
+        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
       ),
       darkTheme: ThemeData.dark(useMaterial3: true),
       themeMode: ThemeMode.system,
@@ -215,10 +213,7 @@ class _NotesHomePageState extends State<NotesHomePage> {
             ? TextField(
                 controller: _searchCtrl,
                 autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: 'Поиск заметок…',
-                  isDense: true,
-                ),
+                decoration: const InputDecoration(hintText: 'Поиск заметок…', isDense: true),
                 onChanged: (_) => setState(() {}),
               )
             : const Text('Заметки'),
