@@ -1,6 +1,6 @@
 workflows:
   debug_apk:
-    name: Debug APK (fetch notes from GitHub)
+    name: Debug APK (notes hard-copy)
     max_build_duration: 60
     environment:
       flutter: stable
@@ -15,31 +15,29 @@ workflows:
           SAFE_NAME="$(echo "$SAFE_NAME" | tr '[:upper:]' '[:lower:]')"
           SAFE_NAME="$(echo "$SAFE_NAME" | sed 's/[^a-z0-9_]/_/g')"
           [[ "$SAFE_NAME" =~ ^[0-9] ]] && SAFE_NAME="app_$SAFE_NAME"
-          echo "Using project name: $SAFE_NAME"
           flutter create --org "${PACKAGE_NAME}" --project-name "$SAFE_NAME" --overwrite .
 
-      - name: Fetch Notes main.dart from GitHub raw
+      - name: Overwrite lib/main.dart from repo root
         script: |
           set -e
           mkdir -p lib
-          RAW_URL="https://raw.githubusercontent.com/v78582514-blip/notes_app_clean/main/main_template.dart"
-          echo "Downloading: $RAW_URL"
-          # -f: fail on HTTP errors, -L: follow redirects, --retry to be resilient
-          curl -fL --retry 3 --retry-delay 2 "$RAW_URL" -o lib/main.dart
+          if [ ! -f "$CM_SOURCE_DIR/main_template.dart" ]; then
+            echo "❌ main_template.dart not found in repo root"; exit 1
+          fi
+          rm -f lib/main.dart
+          cp -f "$CM_SOURCE_DIR/main_template.dart" lib/main.dart
 
           echo "== HEAD of lib/main.dart =="
-          sed -n '1,60p' lib/main.dart
+          sed -n '1,50p' lib/main.dart
 
-          # Валидация: точно не шаблон-счётчик
+          # Проверка: это точно наш код «Заметок», не шаблон-счётчик
           if grep -qi "class NotesApp" lib/main.dart && grep -qi "class NotesHomePage" lib/main.dart; then
             echo "✅ Notes code detected."
           else
-            echo "❌ Notes markers not found (class NotesApp/NotesHomePage)."
-            exit 1
+            echo "❌ Notes markers not found."; exit 1
           fi
           if grep -qiE "Counter|MyHomePage" lib/main.dart; then
-            echo "❌ Counter template strings found. Aborting."
-            exit 1
+            echo "❌ Counter template strings found."; exit 1
           fi
 
       - name: Install dependencies
