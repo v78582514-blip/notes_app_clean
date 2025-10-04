@@ -148,7 +148,7 @@ class NotesStore extends ChangeNotifier {
             colorHex: const Color(0xFF64B5F6).value,
           ),
         );
-        // Попробуем сохранить, но даже если не выйдет — карточка уже видна.
+        // Пробуем сохранить, но даже если не выйдет — карточка уже видна
         await _persist();
       }
     } catch (e) {
@@ -235,10 +235,11 @@ class _NotesHomePageState extends State<NotesHomePage> {
     super.dispose();
   }
 
+  // Копируем список перед сортировкой (чтобы не трогать unmodifiable)
   List<Note> get _visibleNotes {
     final q = _searchCtrl.text.trim().toLowerCase();
     final filtered = q.isEmpty
-        ? List<Note>.from(store.items) // копия списка
+        ? List<Note>.from(store.items)
         : store.items.where((n) => n.text.toLowerCase().contains(q)).toList();
     filtered.sort((a, b) {
       if (a.pinned != b.pinned) return b.pinned ? 1 : -1;
@@ -338,22 +339,47 @@ class _NotesHomePageState extends State<NotesHomePage> {
                 ? const Center(child: CircularProgressIndicator())
                 : notes.isEmpty
                     ? const _EmptyState()
-                    : ListView.builder(
+                    : ListView.separated(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         itemCount: notes.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (context, i) {
                           final n = notes[i];
-                          return Dismissible(
-                            key: ValueKey(n.id),
-                            background: _swipeBg(context, left: true),
-                            secondaryBackground: _swipeBg(context, left: false),
-                            onDismissed: (_) => store.remove(n.id),
-                            child: _NoteTile(
-                              note: n,
-                              onEdit: () => _openEditor(source: n),
-                              onTogglePin: () => store.togglePin(n.id),
-                              onDelete: () => store.remove(n.id),
+                          final color = n.colorHex != null ? Color(n.colorHex!) : null;
+                          return ListTile(
+                            leading: CircleAvatar(
+                              radius: 8,
+                              backgroundColor: color ?? Colors.transparent,
+                              child: color == null ? const Icon(Icons.circle_outlined, size: 14) : null,
                             ),
+                            title: Text(
+                              _firstLine(n.text).isEmpty ? 'Без названия' : _firstLine(n.text),
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              _restText(n.text),
+                              maxLines: 2, overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: Wrap(
+                              spacing: 4,
+                              children: [
+                                if (n.pinned) const Icon(Icons.push_pin, size: 18),
+                                IconButton(
+                                  tooltip: 'Удалить',
+                                  icon: const Icon(Icons.delete_outline),
+                                  onPressed: () => store.remove(n.id),
+                                ),
+                              ],
+                            ),
+                            onTap: () => _openEditor(source: n),
+                            onLongPress: () async {
+                              await Clipboard.setData(ClipboardData(text: n.text));
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Текст скопирован')),
+                                );
+                              }
+                            },
                           );
                         },
                       ),
@@ -383,17 +409,6 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 }
 
-Widget _swipeBg(BuildContext context, {required bool left}) => Container(
-  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-  decoration: BoxDecoration(
-    color: Theme.of(context).colorScheme.errorContainer,
-    borderRadius: BorderRadius.circular(16),
-  ),
-  alignment: left ? Alignment.centerLeft : Alignment.centerRight,
-  padding: EdgeInsets.only(left: left ? 24 : 0, right: left ? 0 : 24),
-  child: const Icon(Icons.delete),
-);
-
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
   @override
@@ -412,123 +427,6 @@ class _EmptyState extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodyMedium, textAlign: TextAlign.center),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _NoteTile extends StatelessWidget {
-  final Note note;
-  final VoidCallback onEdit;
-  final VoidCallback onTogglePin;
-  final VoidCallback onDelete;
-  const _NoteTile({required this.note, required this.onEdit, required this.onTogglePin, required this.onDelete});
-
-  @override
-  Widget build(BuildContext context) {
-    final updated = _formatDate(note.updatedAt);
-    final color = note.colorHex != null ? Color(note.colorHex!) : null;
-
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: InkWell(
-        onTap: onEdit,
-        onLongPress: () async {
-          final action = await showModalBottomSheet<String>(
-            context: context,
-            showDragHandle: true,
-            builder: (ctx) => SafeArea(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ListTile(
-                    leading: const Icon(Icons.copy),
-                    title: const Text('Копировать текст'),
-                    onTap: () => Navigator.pop(ctx, 'copy'),
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.delete_outline),
-                    title: const Text('Удалить'),
-                    onTap: () => Navigator.pop(ctx, 'delete'),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-              ),
-            ),
-          );
-          if (action == 'copy') {
-            await Clipboard.setData(ClipboardData(text: note.text));
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Текст скопирован')),
-              );
-            }
-          } else if (action == 'delete') {
-            onDelete();
-          }
-        },
-        borderRadius: BorderRadius.circular(16),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Container(
-            width: 6,
-            decoration: BoxDecoration(
-              color: color ?? Colors.transparent,
-              borderRadius: const BorderRadius.only(topLeft: Radius.circular(16), bottomLeft: Radius.circular(16)),
-            ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                if (note.pinned)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 4.0, right: 8),
-                    child: Icon(Icons.push_pin, size: 18),
-                  ),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: [
-                      Expanded(
-                        child: Text(
-                          _firstLine(note.text).isEmpty ? 'Без названия' : _firstLine(note.text),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-                        ),
-                      ),
-                      if (color != null)
-                        Container(
-                          width: 14, height: 14, margin: const EdgeInsets.only(left: 8),
-                          decoration: BoxDecoration(
-                            color: color, shape: BoxShape.circle,
-                            border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-                          ),
-                        ),
-                    ]),
-                    const SizedBox(height: 6),
-                    Text(_restText(note.text), maxLines: 3, overflow: TextOverflow.ellipsis),
-                    const SizedBox(height: 8),
-                    Row(children: [
-                      Icon(Icons.access_time, size: 14, color: Theme.of(context).textTheme.bodySmall?.color),
-                      const SizedBox(width: 4),
-                      Text('Обновлено: $updated', style: Theme.of(context).textTheme.bodySmall),
-                    ]),
-                  ]),
-                ),
-                const SizedBox(width: 8),
-                Column(children: [
-                  IconButton(
-                    tooltip: note.pinned ? 'Открепить' : 'Закрепить',
-                    onPressed: onTogglePin,
-                    icon: Icon(note.pinned ? Icons.push_pin : Icons.push_pin_outlined),
-                  ),
-                  IconButton(tooltip: 'Удалить', onPressed: onDelete, icon: const Icon(Icons.delete_outline)),
-                ]),
-              ]),
-            ),
-          ),
-        ]),
       ),
     );
   }
