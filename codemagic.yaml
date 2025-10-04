@@ -1,16 +1,15 @@
 workflows:
   debug_apk:
-    name: Debug APK (resilient)
+    name: Debug APK (resilient, no-heredoc)
     max_build_duration: 60
     environment:
       flutter: stable
       vars:
-        APP_NAME: notice_app            # нижний регистр ✔
+        APP_NAME: notice_app
         PACKAGE_NAME: com.example.notice_app
     scripts:
       - name: Create/overwrite Flutter project
         script: |
-          # нормализуем имя (на случай, если изменишь APP_NAME)
           SAFE_NAME="${APP_NAME// /_}"
           SAFE_NAME="$(echo "$SAFE_NAME" | tr '[:upper:]' '[:lower:]')"
           SAFE_NAME="$(echo "$SAFE_NAME" | sed 's/[^a-z0-9_]/_/g')"
@@ -18,7 +17,7 @@ workflows:
           echo "Using project name: $SAFE_NAME"
           flutter create --org "${PACKAGE_NAME}" --project-name "$SAFE_NAME" --overwrite .
 
-      - name: Add main.dart (use repo if exists, else tiny fallback)
+      - name: Add main.dart (copy if exists, else minimal fallback via printf)
         script: |
           mkdir -p lib
           if [ -f "$CM_SOURCE_DIR/lib/main.dart" ]; then
@@ -26,18 +25,19 @@ workflows:
             cp -f "$CM_SOURCE_DIR/lib/main.dart" lib/main.dart
           else
             echo "⚠️ No lib/main.dart found. Writing tiny fallback..."
-            cat > lib/main.dart <<'DART'
-import 'package:flutter/material.dart';
-void main() => runApp(const MaterialApp(
-  debugShowCheckedModeBanner: false,
-  home: Scaffold(body: Center(child: Text('Notice APK ✅'))),
-));
-DART
+            printf "%s\n" \
+              "import 'package:flutter/material.dart';" \
+              "void main() => runApp(const MaterialApp(" \
+              "  debugShowCheckedModeBanner: false," \
+              "  home: Scaffold(body: Center(child: Text('Notice APK ✅')))," \
+              "));" \
+              > lib/main.dart
           fi
 
       - name: Install dependencies
         script: |
-          # на случай, если твой main.dart использует shared_preferences
+          # Если в твоём lib/main.dart используется shared_preferences — добавим её.
+          # На tiny fallback она не нужна, но команда безопасна.
           flutter pub add shared_preferences || true
           flutter pub get
 
@@ -46,32 +46,3 @@ DART
 
     artifacts:
       - build/app/outputs/flutter-apk/**/*.apk
-
-  release_aab:
-    name: Release AAB (optional)
-    max_build_duration: 60
-    environment:
-      flutter: stable
-      vars:
-        APP_NAME: notice_app
-        PACKAGE_NAME: com.example.notice_app
-    scripts:
-      - name: Create project & add code
-        script: |
-          SAFE_NAME="${APP_NAME// /_}"
-          SAFE_NAME="$(echo "$SAFE_NAME" | tr '[:upper:]' '[:lower:]')"
-          SAFE_NAME="$(echo "$SAFE_NAME" | sed 's/[^a-z0-9_]/_/g')"
-          if [[ "$SAFE_NAME" =~ ^[0-9] ]]; then SAFE_NAME="app_$SAFE_NAME"; fi
-          flutter create --org "${PACKAGE_NAME}" --project-name "$SAFE_NAME" --overwrite .
-          mkdir -p lib
-          if [ -f "$CM_SOURCE_DIR/lib/main.dart" ]; then
-            cp -f "$CM_SOURCE_DIR/lib/main.dart" lib/main.dart
-          else
-            echo "Add lib/main.dart to repo for release builds."; exit 1
-          fi
-          flutter pub add shared_preferences || true
-          flutter pub get
-      - name: Build AAB
-        script: flutter build appbundle --release
-    artifacts:
-      - build/app/outputs/bundle/release/*.aab
