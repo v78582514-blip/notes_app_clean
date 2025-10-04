@@ -3,8 +3,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// ГЛАВНЫЙ МАРКЕР: если ты видишь на экране баннер
-/// "NOTES APP LOADED", значит подхватился именно этот main.dart.
 void main() {
   // Глобальные ловушки ошибок, чтобы не было белого экрана
   FlutterError.onError = (FlutterErrorDetails details) {
@@ -28,7 +26,7 @@ void main() {
     };
     runApp(const NotesApp());
   }, (error, stack) {
-    // На всякий случай: перехват непойманных исключений
+    // Перехват непойманных исключений
   });
 }
 
@@ -51,38 +49,6 @@ class NotesApp extends StatelessWidget {
       themeMode: ThemeMode.system,
       home: const NotesHomePage(),
     );
-  }
-}
-
-/// ЯРКИЙ баннер поверх первого экрана, чтобы понять, что загрузилась именно эта сборка.
-class _StartupBanner extends StatelessWidget {
-  final Widget child;
-  const _StartupBanner({required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(children: [
-      child,
-      Positioned(
-        left: 8, right: 8, top: 8,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.greenAccent.withOpacity(0.9),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-            child: Text(
-              '✅ NOTES APP LOADED (release)',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w700, color: Colors.black,
-              ),
-            ),
-          ),
-        ),
-      ),
-    ]);
   }
 }
 
@@ -167,7 +133,6 @@ class NotesStore extends ChangeNotifier {
         final decoded = jsonDecode(raw);
         if (decoded is List) {
           final list = decoded
-              .cast<Map>()
               .map((e) => Map<String, dynamic>.from(e as Map))
               .map(Note.fromJson)
               .toList();
@@ -175,11 +140,13 @@ class NotesStore extends ChangeNotifier {
             ..clear()
             ..addAll(list);
         } else {
-          await prefs.remove(_prefsKey); // странные данные — очищаем
+          // если вдруг лежит не список — игнорируем и очищаем
+          await prefs.remove(_prefsKey);
         }
       }
     } catch (e) {
-      _error = 'Ошибка загрузки: $e';
+      // не валим приложение — показываем сообщение и продолжаем с пустым списком
+      _error = 'Ошибка загрузки данных: $e';
     } finally {
       _loaded = true;
       notifyListeners();
@@ -262,10 +229,11 @@ class _NotesHomePageState extends State<NotesHomePage> {
     super.dispose();
   }
 
+  // ✅ ИСПРАВЛЕНО: копируем список перед сортировкой, чтобы не трогать unmodifiable
   List<Note> get _visibleNotes {
     final q = _searchCtrl.text.trim().toLowerCase();
     final filtered = q.isEmpty
-        ? store.items
+        ? List<Note>.from(store.items) // ← копия вместо прямой ссылки
         : store.items.where((n) => n.text.toLowerCase().contains(q)).toList();
     filtered.sort((a, b) {
       if (a.pinned != b.pinned) return b.pinned ? 1 : -1;
@@ -315,13 +283,15 @@ class _NotesHomePageState extends State<NotesHomePage> {
             },
             icon: Icon(searching ? Icons.close : Icons.search),
           ),
+          // Кнопка сброса хранилища на случай битых данных
           IconButton(
             tooltip: 'Сбросить данные',
             onPressed: () async {
               await store.resetStorage();
               if (context.mounted) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(const SnackBar(content: Text('Хранилище очищено')));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Хранилище очищено')),
+                );
               }
             },
             icon: const Icon(Icons.restore),
@@ -350,7 +320,10 @@ class _NotesHomePageState extends State<NotesHomePage> {
             children: [
               const Icon(Icons.error_outline, size: 48),
               const SizedBox(height: 12),
-              Text(store.lastError!, textAlign: TextAlign.center),
+              Text(
+                store.lastError!,
+                textAlign: TextAlign.center,
+              ),
               const SizedBox(height: 12),
               FilledButton(
                 onPressed: () => store.resetStorage(),
