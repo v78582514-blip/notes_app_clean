@@ -1,0 +1,46 @@
+workflows:
+  debug_apk:
+    name: Debug APK (safe)
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      vars:
+        APP_NAME: Notes
+        PACKAGE_NAME: com.example.notes
+    scripts:
+      - name: Create/overwrite Flutter project
+        script: |
+          flutter create --org ${PACKAGE_NAME} --project-name ${APP_NAME// /_} --overwrite .
+      - name: Use repo main.dart
+        script: |
+          mkdir -p lib
+          cp -f $CM_SOURCE_DIR/lib/main.dart lib/main.dart
+      - name: Deps
+        script: |
+          flutter pub add shared_preferences
+          flutter pub get
+      - name: Build APK
+        script: flutter build apk --release
+    artifacts:
+      - build/app/outputs/flutter-apk/**/*.apk
+
+  release_aab:
+    name: Release AAB (optional signing)
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      vars:
+        APP_NAME: Notes
+        PACKAGE_NAME: com.example.notes
+    scripts:
+      - name: Create & use repo code
+        script: |
+          flutter create --org ${PACKAGE_NAME} --project-name ${APP_NAME// /_} --overwrite .
+          mkdir -p lib
+          cp -f $CM_SOURCE_DIR/lib/main.dart lib/main.dart
+          flutter pub add shared_preferences
+          flutter pub get
+      - name: Build AAB
+        script: flutter build appbundle --release
+    artifacts:
+      - build/app/outputs/bundle/release/*.aab
