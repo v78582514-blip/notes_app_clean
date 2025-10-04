@@ -17,14 +17,14 @@ workflows:
           echo "Using project name: $SAFE_NAME"
           flutter create --org "${PACKAGE_NAME}" --project-name "$SAFE_NAME" --overwrite .
 
-      - name: Diagnostics: show repo tree
+      - name: Diagnostics - show repo tree
         script: |
           echo "== REPO ROOT ($CM_SOURCE_DIR) =="
-          ls -lah "$CM_SOURCE_DIR"
+          ls -lah "$CM_SOURCE_DIR" || true
           echo "== REPO /lib =="
           ls -lah "$CM_SOURCE_DIR/lib" || true
 
-      - name: Use repo main.dart (strict — fail if missing)
+      - name: Use repo main.dart (strict - fail if missing)
         script: |
           mkdir -p lib
           if [ ! -f "$CM_SOURCE_DIR/lib/main.dart" ]; then
@@ -33,11 +33,10 @@ workflows:
           fi
           cp -f "$CM_SOURCE_DIR/lib/main.dart" lib/main.dart
           echo "== HEAD of lib/main.dart =="
-          sed -n '1,80p' lib/main.dart
+          sed -n '1,120p' lib/main.dart
 
       - name: Install dependencies
         script: |
-          # добавим shared_preferences, если используется в коде — команда безопасна
           flutter pub add shared_preferences || true
           flutter pub get
 
