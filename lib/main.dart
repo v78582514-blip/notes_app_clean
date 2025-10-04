@@ -21,14 +21,13 @@ class NotesApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: scheme,
-        // ✅ Ваша среда ждёт CardThemeData, не CardTheme
         cardTheme: CardThemeData(
           elevation: 2,
           shadowColor: scheme.primary.withOpacity(.15),
           surfaceTintColor: Colors.transparent,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         ),
-        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
+        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputDecoration(borderRadius: BorderRadius.all(Radius.circular(8)))),
       ),
       darkTheme: ThemeData.dark(useMaterial3: true),
       home: const NotesHomePage(),
