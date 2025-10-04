@@ -49,7 +49,7 @@ class NotesApp extends StatelessWidget {
       ),
       darkTheme: ThemeData.dark(useMaterial3: true),
       themeMode: ThemeMode.system,
-      home: const _StartupBanner(child: NotesHomePage()),
+      home: const NotesHomePage(),
     );
   }
 }
