@@ -60,12 +60,14 @@ class Note {
     );
   }
 
+  /// Важно: чтобы явно менять/сбрасывать groupId, используйте [setGroupId: true].
   Note copyWith({
     String? text,
     DateTime? updatedAt,
     int? colorHex,
     bool keepNullColor = false,
-    String? groupId, // передай null чтобы отделить от группы
+    String? groupId,       // новое значение (может быть null)
+    bool setGroupId = false, // если true — применим [groupId], иначе оставим как есть
   }) =>
       Note(
         id: id,
@@ -73,7 +75,7 @@ class Note {
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
         colorHex: keepNullColor ? null : (colorHex ?? this.colorHex),
-        groupId: groupId ?? this.groupId,
+        groupId: setGroupId ? groupId : this.groupId,
       );
 
   Map<String, dynamic> toJson() => {
@@ -81,6 +83,7 @@ class Note {
         'text': text,
         'createdAt': createdAt.millisecondsSinceEpoch,
         'updatedAt': updatedAt.millisecondsSinceEpoch,
+        'pinned': false, // совместимость со старыми версиями
         'colorHex': colorHex,
         'groupId': groupId,
       };
@@ -194,6 +197,7 @@ class NotesStore extends ChangeNotifier {
   }
 
   Future<void> addNote(Note note) async { _notes.add(note); await _persist(); notifyListeners(); }
+
   Future<void> updateNote(Note note) async {
     final i = _notes.indexWhere((n) => n.id == note.id);
     if (i != -1) {
@@ -201,13 +205,16 @@ class NotesStore extends ChangeNotifier {
       await _persist(); notifyListeners();
     }
   }
+
   Future<void> deleteNote(String id) async { _notes.removeWhere((n) => n.id == id); await _persist(); notifyListeners(); }
 
   Future<void> addGroup(Group g) async { _groups.add(g); await _persist(); notifyListeners(); }
+
   Future<void> updateGroup(Group g) async {
     final i = _groups.indexWhere((x) => x.id == g.id);
     if (i != -1) { _groups[i] = g.copyWith(updatedAt: DateTime.now()); await _persist(); notifyListeners(); }
   }
+
   Future<void> deleteGroup(String groupId) async {
     _notes.removeWhere((n) => n.groupId == groupId);
     _groups.removeWhere((g) => g.id == groupId);
@@ -215,21 +222,24 @@ class NotesStore extends ChangeNotifier {
   }
 
   List<Note> notesInGroup(String groupId) => _notes.where((n) => n.groupId == groupId).toList();
-  Group? findGroup(String id) => _groups.firstWhere(
-    (g) => g.id == id, orElse: () => Group(id: '', title: '', updatedAt: DateTime(0)),
-  ).id.isEmpty ? null : _groups.firstWhere((g) => g.id == id);
+
+  Group? findGroup(String id) {
+    final g = _groups.where((e) => e.id == id);
+    return g.isEmpty ? null : g.first;
+  }
 
   Future<void> addNoteToGroup(String noteId, String groupId) async {
     final idx = _notes.indexWhere((n) => n.id == noteId);
     if (idx != -1) {
-      _notes[idx] = _notes[idx].copyWith(groupId: groupId, updatedAt: DateTime.now());
+      _notes[idx] = _notes[idx].copyWith(groupId: groupId, setGroupId: true, updatedAt: DateTime.now());
       await _persist(); notifyListeners();
     }
   }
+
   Future<void> removeNoteFromGroup(String noteId) async {
     final idx = _notes.indexWhere((n) => n.id == noteId);
     if (idx != -1) {
-      _notes[idx] = _notes[idx].copyWith(groupId: null, updatedAt: DateTime.now());
+      _notes[idx] = _notes[idx].copyWith(groupId: null, setGroupId: true, updatedAt: DateTime.now());
       await _persist(); notifyListeners();
     }
   }
@@ -254,8 +264,8 @@ class NotesStore extends ChangeNotifier {
     _groups.add(g);
     final ia = _notes.indexWhere((n) => n.id == a.id);
     final ib = _notes.indexWhere((n) => n.id == b.id);
-    _notes[ia] = a.copyWith(groupId: g.id, updatedAt: DateTime.now());
-    _notes[ib] = b.copyWith(groupId: g.id, updatedAt: DateTime.now());
+    _notes[ia] = a.copyWith(groupId: g.id, setGroupId: true, updatedAt: DateTime.now());
+    _notes[ib] = b.copyWith(groupId: g.id, setGroupId: true, updatedAt: DateTime.now());
     await _persist(); notifyListeners();
   }
 
@@ -423,6 +433,13 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 
   Future<void> _handleDelete(DragPayload payload) async {
+    final ok = await _confirm(
+      title: 'Удалить?',
+      message: payload.isNote ? 'Удалить эту заметку навсегда?' : 'Удалить группу и все её заметки?',
+      confirmText: 'Удалить',
+    );
+    if (ok != true) return;
+
     if (payload.isNote) {
       await store.deleteNote(payload.id);
     } else if (payload.isGroup) {
@@ -444,10 +461,15 @@ class _NotesHomePageState extends State<NotesHomePage> {
       builder: (_) => NoteEditor(note: source),
     );
     if (result == null) return;
+
     if (result.delete) {
-      await store.deleteNote(result.note.id);
+      final ok = await _confirm(title: 'Удалить заметку?', message: 'Действие необратимо.', confirmText: 'Удалить');
+      if (ok == true) {
+        await store.deleteNote(result.note.id);
+      }
       return;
     }
+
     if (source == null) {
       await store.addNote(result.note);
     } else {
@@ -469,7 +491,24 @@ class _NotesHomePageState extends State<NotesHomePage> {
         onRename: (title) async => store.updateGroup(g.copyWith(title: title)),
         onEditNote: (note) async => _openEditor(source: note),
         onUngroupNote: (note) async => store.removeNoteFromGroup(note.id),
-        onDeleteNote: (note) async => store.deleteNote(note.id),
+        onDeleteNote: (note) async {
+          final ok = await _confirm(title: 'Удалить заметку?', message: 'Действие необратимо.', confirmText: 'Удалить');
+          if (ok == true) await store.deleteNote(note.id);
+        },
+      ),
+    );
+  }
+
+  Future<bool?> _confirm({required String title, required String message, String confirmText = 'ОК'}) {
+    return showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(confirmText)),
+        ],
       ),
     );
   }
@@ -784,11 +823,7 @@ class _NoteEditorState extends State<NoteEditor> {
               const Icon(Icons.folder, size: 18),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  'В группе',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                child: Text('В группе', style: Theme.of(context).textTheme.bodyMedium, overflow: TextOverflow.ellipsis),
               ),
               TextButton.icon(
                 onPressed: () => setState(() => _detachFromGroup = !_detachFromGroup),
@@ -840,7 +875,7 @@ class _NoteEditorState extends State<NoteEditor> {
                 );
                 final detached = _detachFromGroup && widget.note?.groupId != null;
                 if (detached) {
-                  note = note.copyWith(groupId: null);
+                  note = note.copyWith(groupId: null, setGroupId: true);
                 }
                 Navigator.of(context).pop(NoteActionResult(note: note, detachedFromGroup: detached));
               },
@@ -860,9 +895,22 @@ class _NoteEditorState extends State<NoteEditor> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: () {
-                final note = widget.note!;
-                Navigator.of(context).pop(NoteActionResult(note: note, delete: true));
+              onPressed: () async {
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    title: const Text('Удалить заметку?'),
+                    content: const Text('Действие необратимо.'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
+                      FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
+                    ],
+                  ),
+                );
+                if (ok == true) {
+                  final note = widget.note!;
+                  Navigator.of(context).pop(NoteActionResult(note: note, delete: true));
+                }
               },
               icon: const Icon(Icons.delete_outline),
               label: const Text('Удалить заметку'),
@@ -972,7 +1020,7 @@ class _GroupEditorState extends State<GroupEditor> {
                   confirmDismiss: (_) async {
                     await widget.onUngroupNote(n);
                     setState(() {});
-                    return false; // не удаляем саму строку — просто обновим список
+                    return false; // не удаляем строку из списка, просто обновляем
                   },
                   child: ListTile(
                     dense: true,
@@ -992,7 +1040,20 @@ class _GroupEditorState extends State<GroupEditor> {
                       IconButton(
                         tooltip: 'Удалить',
                         icon: const Icon(Icons.delete_outline),
-                        onPressed: () async { await widget.onDeleteNote(n); setState(() {}); },
+                        onPressed: () async {
+                          final ok = await showDialog<bool>(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              title: const Text('Удалить заметку?'),
+                              content: const Text('Действие необратимо.'),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
+                                FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
+                              ],
+                            ),
+                          );
+                          if (ok == true) { await widget.onDeleteNote(n); setState(() {}); }
+                        },
                       ),
                     ]),
                   ),
