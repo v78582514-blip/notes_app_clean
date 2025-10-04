@@ -4,10 +4,59 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await settings.load(); // загрузим настройки до запуска
   FlutterError.onError = (details) => FlutterError.presentError(details);
   runZonedGuarded(() => runApp(const NotesApp()), (e, s) {});
+}
+
+/* ===================== SETTINGS (ПАНЕЛЬ УПРАВЛЕНИЯ) ===================== */
+
+final settings = SettingsStore();
+
+enum AppThemeMode { system, light, dark }
+
+class SettingsStore extends ChangeNotifier {
+  static const _k = 'settings_v1';
+  bool numberedLists = false;
+  AppThemeMode themeMode = AppThemeMode.system;
+
+  Future<void> load() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString(_k);
+    if (raw != null && raw.isNotEmpty) {
+      final m = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      numberedLists = (m['numbered'] ?? false) as bool;
+      switch (m['theme'] as String? ?? 'system') {
+        case 'light': themeMode = AppThemeMode.light; break;
+        case 'dark': themeMode = AppThemeMode.dark; break;
+        default: themeMode = AppThemeMode.system;
+      }
+    }
+  }
+
+  Future<void> _save() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_k, jsonEncode({
+      'numbered': numberedLists,
+      'theme': switch (themeMode) {
+        AppThemeMode.light => 'light',
+        AppThemeMode.dark => 'dark',
+        _ => 'system',
+      }
+    }));
+  }
+
+  Future<void> setNumbered(bool v) async { numberedLists = v; await _save(); notifyListeners(); }
+
+  Future<void> setTheme(AppThemeMode m) async { themeMode = m; await _save(); notifyListeners(); }
+
+  ThemeMode get flutterThemeMode => switch (themeMode) {
+    AppThemeMode.light => ThemeMode.light,
+    AppThemeMode.dark => ThemeMode.dark,
+    AppThemeMode.system => ThemeMode.system,
+  };
 }
 
 /* ===================== APP ===================== */
@@ -16,17 +65,25 @@ class NotesApp extends StatelessWidget {
   const NotesApp({super.key});
   @override
   Widget build(BuildContext context) {
-    final scheme = ColorScheme.fromSeed(seedColor: Colors.indigo);
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Заметки',
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: scheme,
-        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
-      ),
-      darkTheme: ThemeData.dark(useMaterial3: true),
-      home: const NotesHomePage(),
+    return AnimatedBuilder(
+      animation: settings,
+      builder: (_, __) {
+        final scheme = ColorScheme.fromSeed(seedColor: Colors.indigo);
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'Заметки',
+          themeMode: settings.flutterThemeMode,
+          theme: ThemeData(
+            useMaterial3: true,
+            colorScheme: scheme,
+            inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
+          ),
+          darkTheme: ThemeData.dark(useMaterial3: true).copyWith(
+            colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo, brightness: Brightness.dark),
+          ),
+          home: const NotesHomePage(),
+        );
+      },
     );
   }
 }
@@ -39,7 +96,7 @@ class Note {
   DateTime createdAt;
   DateTime updatedAt;
   int? colorHex;
-  String? groupId; // если в группе — тут id группы
+  String? groupId;
 
   Note({
     required this.id,
@@ -60,14 +117,14 @@ class Note {
     );
   }
 
-  /// Важно: чтобы явно менять/сбрасывать groupId, используйте [setGroupId: true].
+  /// Чтобы явно поменять/сбросить groupId, установите [setGroupId: true].
   Note copyWith({
     String? text,
     DateTime? updatedAt,
     int? colorHex,
     bool keepNullColor = false,
-    String? groupId,       // новое значение (может быть null)
-    bool setGroupId = false, // если true — применим [groupId], иначе оставим как есть
+    String? groupId,
+    bool setGroupId = false,
   }) =>
       Note(
         id: id,
@@ -83,7 +140,6 @@ class Note {
         'text': text,
         'createdAt': createdAt.millisecondsSinceEpoch,
         'updatedAt': updatedAt.millisecondsSinceEpoch,
-        'pinned': false, // совместимость со старыми версиями
         'colorHex': colorHex,
         'groupId': groupId,
       };
@@ -197,7 +253,6 @@ class NotesStore extends ChangeNotifier {
   }
 
   Future<void> addNote(Note note) async { _notes.add(note); await _persist(); notifyListeners(); }
-
   Future<void> updateNote(Note note) async {
     final i = _notes.indexWhere((n) => n.id == note.id);
     if (i != -1) {
@@ -205,16 +260,13 @@ class NotesStore extends ChangeNotifier {
       await _persist(); notifyListeners();
     }
   }
-
   Future<void> deleteNote(String id) async { _notes.removeWhere((n) => n.id == id); await _persist(); notifyListeners(); }
 
   Future<void> addGroup(Group g) async { _groups.add(g); await _persist(); notifyListeners(); }
-
   Future<void> updateGroup(Group g) async {
     final i = _groups.indexWhere((x) => x.id == g.id);
     if (i != -1) { _groups[i] = g.copyWith(updatedAt: DateTime.now()); await _persist(); notifyListeners(); }
   }
-
   Future<void> deleteGroup(String groupId) async {
     _notes.removeWhere((n) => n.groupId == groupId);
     _groups.removeWhere((g) => g.id == groupId);
@@ -223,11 +275,6 @@ class NotesStore extends ChangeNotifier {
 
   List<Note> notesInGroup(String groupId) => _notes.where((n) => n.groupId == groupId).toList();
 
-  Group? findGroup(String id) {
-    final g = _groups.where((e) => e.id == id);
-    return g.isEmpty ? null : g.first;
-  }
-
   Future<void> addNoteToGroup(String noteId, String groupId) async {
     final idx = _notes.indexWhere((n) => n.id == noteId);
     if (idx != -1) {
@@ -235,7 +282,6 @@ class NotesStore extends ChangeNotifier {
       await _persist(); notifyListeners();
     }
   }
-
   Future<void> removeNoteFromGroup(String noteId) async {
     final idx = _notes.indexWhere((n) => n.id == noteId);
     if (idx != -1) {
@@ -252,9 +298,7 @@ class NotesStore extends ChangeNotifier {
     if (a.groupId != null && b.groupId != null) {
       if (a.groupId != b.groupId) {
         final target = a.groupId!, source = b.groupId!;
-        for (final n in _notes.where((n) => n.groupId == source)) {
-          await addNoteToGroup(n.id, target);
-        }
+        for (final n in _notes.where((n) => n.groupId == source)) { await addNoteToGroup(n.id, target); }
         _groups.removeWhere((g) => g.id == source);
         await _persist(); notifyListeners();
       }
@@ -340,6 +384,11 @@ class _NotesHomePageState extends State<NotesHomePage> {
         ),
         actions: [
           IconButton(
+            tooltip: 'Настройки',
+            onPressed: _openSettings,
+            icon: const Icon(Icons.settings),
+          ),
+          IconButton(
             tooltip: 'Добавить заметку',
             onPressed: () => _openEditor(),
             icon: const Icon(Icons.add),
@@ -404,6 +453,17 @@ class _NotesHomePageState extends State<NotesHomePage> {
                       ),
                   ],
                 ),
+    );
+  }
+
+  /* ====== SETTINGS SHEET ====== */
+
+  void _openSettings() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => const SettingsSheet(),
     );
   }
 
@@ -514,6 +574,79 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 }
 
+/* ===================== SETTINGS SHEET UI ===================== */
+
+class SettingsSheet extends StatefulWidget {
+  const SettingsSheet({super.key});
+  @override
+  State<SettingsSheet> createState() => _SettingsSheetState();
+}
+
+class _SettingsSheetState extends State<SettingsSheet> {
+  AppThemeMode _mode = settings.themeMode;
+  bool _numbered = settings.numberedLists;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        left: 16, right: 16, top: 8,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('Панель управления', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            value: _numbered,
+            onChanged: (v) => setState(() => _numbered = v),
+            title: const Text('Нумерованные списки'),
+            subtitle: const Text('Каждая строка заметки будет отображаться как пункт 1., 2., 3.…'),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text('Тема приложения', style: Theme.of(context).textTheme.labelLarge),
+          ),
+          const SizedBox(height: 8),
+          SegmentedButton<AppThemeMode>(
+            segments: const [
+              ButtonSegment(value: AppThemeMode.system, label: Text('Системная'), icon: Icon(Icons.phone_android)),
+              ButtonSegment(value: AppThemeMode.light, label: Text('Светлая'), icon: Icon(Icons.wb_sunny_outlined)),
+              ButtonSegment(value: AppThemeMode.dark, label: Text('Тёмная'), icon: Icon(Icons.dark_mode_outlined)),
+            ],
+            selected: {_mode},
+            onSelectionChanged: (s) => setState(() => _mode = s.first),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () async {
+                    await settings.setNumbered(_numbered);
+                    await settings.setTheme(_mode);
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  icon: const Icon(Icons.save), label: const Text('Сохранить'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => Navigator.maybePop(context),
+                  icon: const Icon(Icons.close), label: const Text('Отмена'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /* ===================== DRAG PAYLOAD / TILE ===================== */
 
 class DragPayload {
@@ -605,11 +738,13 @@ class _NoteCardGrid extends StatelessWidget {
     final color = note.colorHex != null ? Color(note.colorHex!) : null;
     final updated = _formatDate(note.updatedAt);
 
+    final textPreview = _formatPreview(note.text, numbered: settings.numberedLists);
+
     final card = Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
-        // копирование текста — двойной тап, чтобы long-press оставался для drag
+        // копирование текста — двойной тап
         onDoubleTap: () async {
           await Clipboard.setData(ClipboardData(text: note.text));
           if (context.mounted) {
@@ -643,7 +778,7 @@ class _NoteCardGrid extends StatelessWidget {
             const SizedBox(height: 8),
             Expanded(
               child: Text(
-                _restText(note.text),
+                textPreview,
                 maxLines: 6,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -721,7 +856,10 @@ class _GroupCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
-                        _firstLine(n.text).isEmpty ? 'Без названия' : _firstLine(n.text),
+                        _formatPreview(
+                          _firstLine(n.text).isEmpty ? 'Без названия' : _firstLine(n.text),
+                          numbered: false, // в мини-превью не нумеруем
+                        ),
                         maxLines: 2, overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
@@ -815,16 +953,13 @@ class _NoteEditorState extends State<NoteEditor> {
             icon: const Icon(Icons.calendar_month),
           ),
         ]),
-
         if (inGroup) ...[
           const SizedBox(height: 8),
           Row(
             children: [
               const Icon(Icons.folder, size: 18),
               const SizedBox(width: 8),
-              Expanded(
-                child: Text('В группе', style: Theme.of(context).textTheme.bodyMedium, overflow: TextOverflow.ellipsis),
-              ),
+              Expanded(child: Text('В группе', style: Theme.of(context).textTheme.bodyMedium)),
               TextButton.icon(
                 onPressed: () => setState(() => _detachFromGroup = !_detachFromGroup),
                 icon: Icon(_detachFromGroup ? Icons.check_box : Icons.check_box_outline_blank),
@@ -833,7 +968,6 @@ class _NoteEditorState extends State<NoteEditor> {
             ],
           ),
         ],
-
         const SizedBox(height: 8),
         Align(
           alignment: Alignment.centerLeft,
@@ -1020,7 +1154,7 @@ class _GroupEditorState extends State<GroupEditor> {
                   confirmDismiss: (_) async {
                     await widget.onUngroupNote(n);
                     setState(() {});
-                    return false; // не удаляем строку из списка, просто обновляем
+                    return false;
                   },
                   child: ListTile(
                     dense: true,
@@ -1029,7 +1163,10 @@ class _GroupEditorState extends State<GroupEditor> {
                       _firstLine(n.text).isEmpty ? 'Без названия' : _firstLine(n.text),
                       maxLines: 1, overflow: TextOverflow.ellipsis,
                     ),
-                    subtitle: Text(_restText(n.text), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(
+                      _formatPreview(_restText(n.text), numbered: settings.numberedLists),
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                    ),
                     onTap: () async { await widget.onEditNote(n); setState(() {}); },
                     trailing: Wrap(spacing: 8, children: [
                       IconButton(
@@ -1067,7 +1204,15 @@ class _GroupEditorState extends State<GroupEditor> {
   }
 }
 
-/* ===================== SMALL WIDGETS & UTILS ===================== */
+/* ===================== HELPERS & UTILS ===================== */
+
+List<Color> _palette() => const [
+  Color(0xFFE57373), Color(0xFFF06292), Color(0xFFBA68C8), Color(0xFF9575CD),
+  Color(0xFF7986CB), Color(0xFF64B5F6), Color(0xFF4FC3F7), Color(0xFF4DD0E1),
+  Color(0xFF4DB6AC), Color(0xFF81C784), Color(0xFFAED581), Color(0xFFDCE775),
+  Color(0xFFFFF176), Color(0xFFFFD54F), Color(0xFFFFB74D), Color(0xFFFF8A65),
+  Color(0xFFA1887F), Color(0xFF90A4AE),
+];
 
 class _ColorDot extends StatelessWidget {
   final Color? color;
@@ -1129,13 +1274,7 @@ class _ErrorPane extends StatelessWidget {
   }
 }
 
-List<Color> _palette() => const [
-  Color(0xFFE57373), Color(0xFFF06292), Color(0xFFBA68C8), Color(0xFF9575CD),
-  Color(0xFF7986CB), Color(0xFF64B5F6), Color(0xFF4FC3F7), Color(0xFF4DD0E1),
-  Color(0xFF4DB6AC), Color(0xFF81C784), Color(0xFFAED581), Color(0xFFDCE775),
-  Color(0xFFFFF176), Color(0xFFFFD54F), Color(0xFFFFB74D), Color(0xFFFF8A65),
-  Color(0xFFA1887F), Color(0xFF90A4AE),
-];
+/* ===== Текстовые утилиты (нумерация строк при отображении) ===== */
 
 String _firstLine(String t) {
   final ls = t.trim().split('\n');
@@ -1151,4 +1290,22 @@ String _formatDate(DateTime dt) {
   final now = DateTime.now();
   final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
   return sameDay ? '${_pad(dt.hour)}:${_pad(dt.minute)}' : '${_pad(dt.day)}.${_pad(dt.month)}.${dt.year}';
+}
+
+/// Рендер превью: если [numbered] = true, добавляем "1. ", "2. " ко всем непустым строкам.
+String _formatPreview(String text, {required bool numbered}) {
+  if (!numbered) return text;
+  final lines = text.split('\n');
+  int i = 0;
+  final out = <String>[];
+  for (final raw in lines) {
+    final s = raw.trimRight();
+    if (s.isEmpty) {
+      out.add(s); // пустые строки оставляем
+    } else {
+      i += 1;
+      out.add('$i. $s');
+    }
+  }
+  return out.join('\n');
 }
