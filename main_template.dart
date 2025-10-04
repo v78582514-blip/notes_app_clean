@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // для Clipboard (копирование)
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
-  // Глобальные ловушки ошибок, чтобы не было белого экрана
+void main() async {
+  // ВАЖНО: гарантируем инициализацию, чтобы плагины (SharedPreferences) работали стабильно
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Ловушки ошибок, чтобы не было «белого экрана»
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details);
   };
@@ -16,10 +19,7 @@ void main() {
           appBar: AppBar(title: const Text('Ошибка запуска')),
           body: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
-            child: Text(
-              details.exceptionAsString(),
-              style: const TextStyle(fontSize: 14),
-            ),
+            child: Text(details.exceptionAsString(), style: const TextStyle(fontSize: 14)),
           ),
         ),
       );
@@ -30,7 +30,6 @@ void main() {
 
 class NotesApp extends StatelessWidget {
   const NotesApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -39,9 +38,7 @@ class NotesApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-        ),
+        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
       ),
       darkTheme: ThemeData.dark(useMaterial3: true),
       themeMode: ThemeMode.system,
@@ -114,6 +111,8 @@ class Note {
 
 class NotesStore extends ChangeNotifier {
   static const _prefsKey = 'notes_v1_colors';
+  static const _firstRunKey = 'notes_first_run_done';
+
   final List<Note> _items = [];
   bool _loaded = false;
   String? _error;
@@ -138,12 +137,26 @@ class NotesStore extends ChangeNotifier {
             ..clear()
             ..addAll(list);
         } else {
-          // если вдруг лежит не список — игнорируем и очищаем
           await prefs.remove(_prefsKey);
         }
       }
+
+      // Если это первый запуск и список пуст — добавим демо-заметку
+      final firstRunDone = prefs.getBool(_firstRunKey) ?? false;
+      if (!firstRunDone && _items.isEmpty) {
+        _items.add(
+          Note(
+            id: DateTime.now().microsecondsSinceEpoch.toString(),
+            text: 'Это ваша первая заметка!\nНажмите «Новая», чтобы создать ещё.',
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+            colorHex: const Color(0xFF64B5F6).value,
+          ),
+        );
+        await _persist();
+        await prefs.setBool(_firstRunKey, true);
+      }
     } catch (e) {
-      // не валим приложение — показываем сообщение и продолжаем с пустым списком
       _error = 'Ошибка загрузки данных: $e';
     } finally {
       _loaded = true;
@@ -196,6 +209,7 @@ class NotesStore extends ChangeNotifier {
   Future<void> resetStorage() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_prefsKey);
+    await prefs.remove(_firstRunKey);
     _items.clear();
     _error = null;
     notifyListeners();
@@ -227,11 +241,11 @@ class _NotesHomePageState extends State<NotesHomePage> {
     super.dispose();
   }
 
-  // ✅ ИСПРАВЛЕНО: копируем список перед сортировкой, чтобы не трогать unmodifiable
+  // Копируем список перед сортировкой (чтобы не трогать unmodifiable)
   List<Note> get _visibleNotes {
     final q = _searchCtrl.text.trim().toLowerCase();
     final filtered = q.isEmpty
-        ? List<Note>.from(store.items) // копия вместо прямой ссылки
+        ? List<Note>.from(store.items)
         : store.items.where((n) => n.text.toLowerCase().contains(q)).toList();
     filtered.sort((a, b) {
       if (a.pinned != b.pinned) return b.pinned ? 1 : -1;
@@ -253,20 +267,24 @@ class _NotesHomePageState extends State<NotesHomePage> {
     } else {
       await store.update(created);
     }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Сохранено')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final notes = _visibleNotes;
+
     return Scaffold(
       appBar: AppBar(
         title: searching
             ? TextField(
                 controller: _searchCtrl,
                 autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: 'Поиск заметок…',
-                  isDense: true,
-                ),
+                decoration: const InputDecoration(hintText: 'Поиск заметок…', isDense: true),
                 onChanged: (_) => setState(() {}),
               )
             : const Text('Заметки'),
@@ -281,7 +299,6 @@ class _NotesHomePageState extends State<NotesHomePage> {
             },
             icon: Icon(searching ? Icons.close : Icons.search),
           ),
-          // Кнопка сброса хранилища на случай битых данных
           IconButton(
             tooltip: 'Сбросить данные',
             onPressed: () async {
@@ -296,63 +313,34 @@ class _NotesHomePageState extends State<NotesHomePage> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: !store.isLoaded
+          ? const Center(child: CircularProgressIndicator())
+          : notes.isEmpty
+              ? const _EmptyState()
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: notes.length,
+                  itemBuilder: (context, i) {
+                    final n = notes[i];
+                    return Dismissible(
+                      key: ValueKey(n.id),
+                      background: _swipeBg(context, left: true),
+                      secondaryBackground: _swipeBg(context, left: false),
+                      onDismissed: (_) => store.remove(n.id),
+                      child: _NoteTile(
+                        note: n,
+                        onEdit: () => _openEditor(source: n),
+                        onTogglePin: () => store.togglePin(n.id),
+                        onDelete: () => store.remove(n.id),
+                      ),
+                    );
+                  },
+                ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openEditor(),
         icon: const Icon(Icons.add),
         label: const Text('Новая'),
       ),
-    );
-  }
-
-  Widget _buildBody() {
-    if (!store.isLoaded) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (store.lastError != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 48),
-              const SizedBox(height: 12),
-              Text(
-                store.lastError!,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              FilledButton(
-                onPressed: () => store.resetStorage(),
-                child: const Text('Сбросить и продолжить'),
-              )
-            ],
-          ),
-        ),
-      );
-    }
-    final notes = _visibleNotes;
-    if (notes.isEmpty) return const _EmptyState();
-
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: notes.length,
-      itemBuilder: (context, i) {
-        final n = notes[i];
-        return Dismissible(
-          key: ValueKey(n.id),
-          background: _swipeBg(context, left: true),
-          secondaryBackground: _swipeBg(context, left: false),
-          onDismissed: (_) => store.remove(n.id),
-          child: _NoteTile(
-            note: n,
-            onEdit: () => _openEditor(source: n),
-            onTogglePin: () => store.togglePin(n.id),
-            onDelete: () => store.remove(n.id),
-          ),
-        );
-      },
     );
   }
 }
@@ -594,8 +582,11 @@ class _NoteEditorState extends State<NoteEditor> {
                 final raw = _ctrl.text.trim();
                 final text = raw.isEmpty ? '' : raw;
                 final note = (widget.note ?? Note.newNote()).copyWith(
-                  text: text, updatedAt: DateTime.now(),
-                  colorHex: _selectedColor?.value, keepNullColor: _selectedColor == null,
+                  text: text,
+                  updatedAt: DateTime.now(),
+                  colorHex: _selectedColor?.value,
+                  // если цвет не выбран, сохраняем null
+                  keepNullColor: _selectedColor == null,
                 );
                 Navigator.of(context).pop(note);
               },
@@ -632,10 +623,7 @@ class _ColorDot extends StatelessWidget {
           width: 28, height: 28,
           decoration: BoxDecoration(
             color: color ?? Colors.transparent, shape: BoxShape.circle,
-            border: Border.all(
-              color: selected ? Theme.of(context).colorScheme.primary : borderColor,
-              width: selected ? 2 : 1,
-            ),
+            border: Border.all(color: selected ? Theme.of(context).colorScheme.primary : borderColor, width: selected ? 2 : 1),
           ),
           child: color == null ? const Center(child: Icon(Icons.close, size: 16)) : null,
         ),
