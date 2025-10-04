@@ -1,17 +1,40 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// ГЛАВНЫЙ МАРКЕР: если ты видишь на экране баннер
+/// "NOTES APP LOADED", значит подхватился именно этот main.dart.
 void main() {
-  // Поймаем любые ошибки фреймворка и покажем их на экране вместо “белого”.
+  // Глобальные ловушки ошибок, чтобы не было белого экрана
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details);
+    // В релизе не падаем, а продолжаем с ErrorWidget
   };
-  runApp(const NotesApp());
+  runZonedGuarded(() {
+    ErrorWidget.builder = (FlutterErrorDetails details) {
+      return MaterialApp(
+        home: Scaffold(
+          appBar: AppBar(title: const Text('Ошибка запуска')),
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              details.exceptionAsString(),
+              style: const TextStyle(fontSize: 14),
+            ),
+          ),
+        ),
+      );
+    };
+    runApp(const NotesApp());
+  }, (error, stack) {
+    // На всякий случай: перехват непойманных исключений
+  });
 }
 
 class NotesApp extends StatelessWidget {
   const NotesApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -20,12 +43,46 @@ class NotesApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
+        inputDecorationTheme: const InputDecorationTheme(
+          border: OutlineInputBorder(),
+        ),
       ),
       darkTheme: ThemeData.dark(useMaterial3: true),
       themeMode: ThemeMode.system,
-      home: const NotesHomePage(),
+      home: const _StartupBanner(child: NotesHomePage()),
     );
+  }
+}
+
+/// ЯРКИЙ баннер поверх первого экрана, чтобы понять, что загрузилась именно эта сборка.
+class _StartupBanner extends StatelessWidget {
+  final Widget child;
+  const _StartupBanner({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(children: [
+      child,
+      Positioned(
+        left: 8, right: 8, top: 8,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.greenAccent.withOpacity(0.9),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+            child: Text(
+              '✅ NOTES APP LOADED (release)',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w700, color: Colors.black,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ]);
   }
 }
 
@@ -118,13 +175,11 @@ class NotesStore extends ChangeNotifier {
             ..clear()
             ..addAll(list);
         } else {
-          // если вдруг лежит не список — игнорируем и очищаем
-          await prefs.remove(_prefsKey);
+          await prefs.remove(_prefsKey); // странные данные — очищаем
         }
       }
     } catch (e) {
-      // не валим приложение — показываем сообщение и продолжаем с пустым списком
-      _error = 'Ошибка загрузки данных: $e';
+      _error = 'Ошибка загрузки: $e';
     } finally {
       _loaded = true;
       notifyListeners();
@@ -236,7 +291,6 @@ class _NotesHomePageState extends State<NotesHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    // Верхняя плашка — видно даже если список пуст
     return Scaffold(
       appBar: AppBar(
         title: searching
@@ -261,15 +315,13 @@ class _NotesHomePageState extends State<NotesHomePage> {
             },
             icon: Icon(searching ? Icons.close : Icons.search),
           ),
-          // Кнопка сброса хранилища на случай битых данных
           IconButton(
             tooltip: 'Сбросить данные',
             onPressed: () async {
               await store.resetStorage();
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Хранилище очищено')),
-                );
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(const SnackBar(content: Text('Хранилище очищено')));
               }
             },
             icon: const Icon(Icons.restore),
@@ -298,10 +350,7 @@ class _NotesHomePageState extends State<NotesHomePage> {
             children: [
               const Icon(Icons.error_outline, size: 48),
               const SizedBox(height: 12),
-              Text(
-                store.lastError!,
-                textAlign: TextAlign.center,
-              ),
+              Text(store.lastError!, textAlign: TextAlign.center),
               const SizedBox(height: 12),
               FilledButton(
                 onPressed: () => store.resetStorage(),
