@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // для Clipboard (копирование)
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   // Глобальные ловушки ошибок, чтобы не было белого экрана
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details);
-    // В релизе не падаем, а продолжаем с ErrorWidget
   };
   runZonedGuarded(() {
     ErrorWidget.builder = (FlutterErrorDetails details) {
@@ -25,9 +25,7 @@ void main() {
       );
     };
     runApp(const NotesApp());
-  }, (error, stack) {
-    // Перехват непойманных исключений
-  });
+  }, (error, stack) {});
 }
 
 class NotesApp extends StatelessWidget {
@@ -233,7 +231,7 @@ class _NotesHomePageState extends State<NotesHomePage> {
   List<Note> get _visibleNotes {
     final q = _searchCtrl.text.trim().toLowerCase();
     final filtered = q.isEmpty
-        ? List<Note>.from(store.items) // ← копия вместо прямой ссылки
+        ? List<Note>.from(store.items) // копия вместо прямой ссылки
         : store.items.where((n) => n.text.toLowerCase().contains(q)).toList();
     filtered.sort((a, b) {
       if (a.pinned != b.pinned) return b.pinned ? 1 : -1;
@@ -410,6 +408,40 @@ class _NoteTile extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: InkWell(
         onTap: onEdit,
+        onLongPress: () async {
+          final action = await showModalBottomSheet<String>(
+            context: context,
+            showDragHandle: true,
+            builder: (ctx) => SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.copy),
+                    title: const Text('Копировать текст'),
+                    onTap: () => Navigator.pop(ctx, 'copy'),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.delete_outline),
+                    title: const Text('Удалить'),
+                    onTap: () => Navigator.pop(ctx, 'delete'),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+          );
+          if (action == 'copy') {
+            await Clipboard.setData(ClipboardData(text: note.text));
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Текст скопирован')),
+              );
+            }
+          } else if (action == 'delete') {
+            onDelete();
+          }
+        },
         borderRadius: BorderRadius.circular(16),
         child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Container(
