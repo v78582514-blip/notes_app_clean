@@ -21,8 +21,10 @@ class NotesApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: scheme,
-        // ⛑ Убрали кастомизацию cardTheme, чтобы не конфликтовать с вашей версией Flutter
-        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
+        // Без кастомного cardTheme — чтобы не было конфликтов версий Flutter
+        inputDecorationTheme: const InputDecorationTheme(
+          border: OutlineInputBorder(),
+        ),
       ),
       darkTheme: ThemeData.dark(useMaterial3: true),
       home: const NotesHomePage(),
@@ -313,8 +315,8 @@ class _Content extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ✅ важный фикс: только `&&` (и убрали const у _EmptyState)
-    if (pinned.isEmpty && others.isEmpty) return _EmptyState();
+    // Важно: оператор И — && ; и _EmptyState существует ниже
+    if (pinned.isEmpty && others.isEmpty) return const _EmptyState();
 
     return SingleChildScrollView(
       padding: const EdgeInsets.only(bottom: 100),
@@ -722,6 +724,36 @@ class _ErrorPane extends StatelessWidget {
             Text(err, textAlign: TextAlign.center),
             const SizedBox(height: 12),
             FilledButton(onPressed: onReset, child: const Text('Повторить')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.note_alt_outlined, size: 72),
+            const SizedBox(height: 16),
+            const Text(
+              'Нет заметок',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Нажмите «Новая», чтобы создать первую запись.',
+              style: Theme.of(context).textTheme.bodyMedium,
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       ),
