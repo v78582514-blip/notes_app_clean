@@ -5,7 +5,7 @@ pluginManagement {
         gradlePluginPortal()
     }
 
-    // подключаем Flutter gradle-плагин из SDK
+    // Подключаем Flutter Gradle плагин из SDK Flutter
     def flutterSdkPath = {
         def props = new Properties()
         def localProps = new File(rootProject.projectDir, "local.properties")
