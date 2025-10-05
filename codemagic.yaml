@@ -1,27 +1,53 @@
 workflows:
   android_release:
     name: Android Release APK
+    max_build_duration: 60
     environment:
       flutter: stable
       xcode: latest
-      android_signing:
-        - my-release-keystore   # <-- ИМЕННО то имя, которое задал(а) в Code signing
+
     scripts:
-      - name: Flutter pub get
+      - name: 🔹 Подготовка проекта
         script: |
+          echo "🧹 Очистка и установка зависимостей..."
           flutter clean
           flutter pub get
-      - name: Build release APK (signed)
+
+      - name: 🔹 Сборка релизного APK
         script: |
+          echo "🏗️ Собираем релиз..."
           BN=$(date +%s)
-          flutter build apk --release --build-number="$BN" --build-name="1.0.$BN" --no-shrink
-      - name: Collect APK artifact
+          flutter build apk --release \
+            --build-number="$BN" \
+            --build-name="1.0.$BN" \
+            --no-shrink
+
+      - name: 🔹 Поиск и копирование APK
         script: |
-          echo "List outputs:"; ls -R build/app/outputs || true
+          echo "🔍 Ищем собранный APK..."
+          ls -R build/app/outputs || true
+
           APK_PATH=$(find build/app/outputs -type f -name "app-release.apk" -print -quit)
-          if [ -z "$APK_PATH" ]; then APK_PATH=$(find build/app/outputs -type f -name "*release*.apk" -print -quit); fi
-          if [ -z "$APK_PATH" ]; then echo "❌ APK not found"; exit 1; fi
+          if [ -z "$APK_PATH" ]; then
+            APK_PATH=$(find build/app/outputs -type f -name "*release*.apk" -print -quit)
+          fi
+
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ Не найден app-release.apk"
+            exit 1
+          fi
+
+          echo "✅ Найден: $APK_PATH"
           mkdir -p build/publish
           cp -v "$APK_PATH" build/publish/
+
     artifacts:
       - build/publish/*.apk
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: "*"
+          include: true
+          source: true
