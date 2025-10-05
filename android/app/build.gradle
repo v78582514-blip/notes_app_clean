@@ -1,39 +1,50 @@
-// android/app/build.gradle  — полный файл
+// android/app/build.gradle
 
 plugins {
     id "com.android.application"
-    id "org.jetbrains.kotlin.android"
-    // Плагин Flutter подключается через settings.gradle (includeBuild),
-    // но его id должен быть здесь, чтобы подхватились таски.
+    id "kotlin-android"
+    // этот плагин подключается Flutter'ом из settings.gradle
     id "dev.flutter.flutter-gradle-plugin"
 }
 
-// Загружаем параметры подписи из android/key.properties
-def keystoreProperties = new Properties()
-def keystorePropertiesFile = rootProject.file("key.properties")
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-}
-
 android {
-    namespace "com.example.notice_app"          // ← при необходимости замени на свой пакет
-    compileSdk 36
+    namespace "com.example.notice_app"       // при желании поменяй на свой пакет
+    compileSdk 34
 
     defaultConfig {
-        applicationId "com.example.notice_app"  // ← при необходимости замени на свой пакет
-        minSdk 23                               // Требование Flutter: minSdk ≥ 23
-        targetSdk 36
-
+        applicationId "com.example.notice_app" // при желании поменяй на свой пакет
+        minSdk 23
+        targetSdk 34
         versionCode 1
         versionName "1.0"
+        multiDexEnabled true
+    }
 
-        // Для NDK/CMake предупреждений (если не используешь — можно оставить как есть)
-        ndk {
-            debugSymbolLevel "NONE"
+    // ⚠️ Используем автосозданный keystore (workflow кладёт его в android/app/auto-release.jks)
+    signingConfigs {
+        release {
+            storeFile file("auto-release.jks")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
         }
     }
 
-    // Java/Kotlin 17 (исправляет несоответствие JVM target)
+    buildTypes {
+        release {
+            // подпись релиза этим ключом
+            signingConfig signingConfigs.release
+            // без шринка/минификации — проще для CI
+            minifyEnabled false
+            shrinkResources false
+        }
+        debug {
+            // можно подписывать тем же ключом, чтобы ставилось на устройство
+            signingConfig signingConfigs.release
+        }
+    }
+
+    // Для современных плагинов/AGP
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -41,51 +52,12 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-
-    // Конфигурация подписи релиза из key.properties
-    signingConfigs {
-        release {
-            // Если key.properties отсутствует — сборка не упадёт, но релиз будет без подписи.
-            // Для установки на устройство нужен подписанный APK.
-            if (keystorePropertiesFile.exists()) {
-                keyAlias keystoreProperties["keyAlias"]
-                keyPassword keystoreProperties["keyPassword"]
-                storeFile file(keystoreProperties["storeFile"])
-                storePassword keystoreProperties["storePassword"]
-            }
-        }
-    }
-
-    buildTypes {
-        release {
-            // Подписываем, только если есть key.properties
-            if (keystorePropertiesFile.exists()) {
-                signingConfig signingConfigs.release
-            }
-            // На этапе настройки сборочного конвейера выключим shrink,
-            // чтобы избежать случайных ошибок с ресурсами/обфускацией.
-            minifyEnabled false
-            shrinkResources false
-        }
-        debug {
-            debuggable true
-        }
-    }
-
-    // Убираем некоторые лишние META-INF из зависимостей
-    packagingOptions {
-        resources {
-            excludes += ["META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/*.kotlin_module"]
-        }
-    }
 }
 
 flutter {
-    // путь к корню проекта Flutter
-    source "../.."
+    source '../..'
 }
 
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:2.1.0"
-    implementation "com.google.android.material:material:1.12.0"
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
 }
