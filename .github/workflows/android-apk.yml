@@ -14,6 +14,7 @@ jobs:
       KEY_ALIAS: myKey
       KEY_PASS: myPassword
       STORE_PASS: myPassword
+      GRADLE_VERSION: "8.7"
 
     steps:
       - name: Checkout
@@ -36,30 +37,38 @@ jobs:
           flutter clean
           flutter pub get
 
-      - name: Build release via Gradle (assembleRelease)
+      # Важно: НЕ ставим gradle через apt. Скачиваем нужную версию 8.7 и ей создаём wrapper
+      - name: Ensure Gradle wrapper (download Gradle ${GRADLE_VERSION})
         run: |
           set -euo pipefail
           cd android
           if [ ! -f "./gradlew" ]; then
-            echo "gradlew not found, generating wrapper..."
-            sudo apt-get update && sudo apt-get install -y gradle
-            gradle wrapper --gradle-version 8.7
+            echo "No gradlew -> downloading Gradle ${GRADLE_VERSION} to create wrapper..."
+            curl -sL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o gradle.zip
+            unzip -q gradle.zip
+            ./gradle-${GRADLE_VERSION}/bin/gradle --version
+            ./gradle-${GRADLE_VERSION}/bin/gradle wrapper --gradle-version ${GRADLE_VERSION}
           fi
           chmod +x ./gradlew
-          ./gradlew -v || true
+          ./gradlew --version
+          cd ..
+
+      - name: Build release via Gradle (assembleRelease)
+        run: |
+          set -euo pipefail
+          cd android
           ./gradlew :app:assembleRelease --info --stacktrace
-          echo "📁 outputs:"
+          echo "📁 outputs tree:"
           ls -R app/build/outputs || true
+          cd ..
 
       - name: Locate unsigned/release APK
         id: locate
         run: |
           set -euo pipefail
-          # Ищем всё релизное
           FOUND=$( ( find android/app/build/outputs/apk/release -type f -name "*release*.apk" -print 2>/dev/null || true ) | sort -u )
           echo "FOUND:"
           echo "$FOUND"
-          # Предпочитаем unsigned, если есть
           UNSIGNED=$(echo "$FOUND" | grep -E 'release.*-unsigned\.apk$' | head -n1 || true)
           RELEASE=$(echo "$FOUND" | grep -E 'release.*\.apk$' | grep -v unsigned | head -n1 || true)
 
@@ -70,7 +79,7 @@ jobs:
             echo "apk_path=$RELEASE"  >> "$GITHUB_OUTPUT"
             echo "apk_type=signed"    >> "$GITHUB_OUTPUT"
           else
-            echo "❌ Не найден ни один release APK"
+            echo "❌ No release APKs found"
             exit 1
           fi
           echo "Chosen: ${{ steps.locate.outputs.apk_path }}"
@@ -94,8 +103,6 @@ jobs:
         run: |
           set -euo pipefail
           APK="${{ steps.locate.outputs.apk_path }}"
-
-          # Найдём самый новый набор build-tools
           SDK_DIR="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
           BT_DIR=$(ls -d "$SDK_DIR/build-tools/"* | sort -V | tail -1)
 
@@ -103,16 +110,11 @@ jobs:
           APKSIGNER="$BT_DIR/apksigner"
 
           echo "Using build-tools: $BT_DIR"
-          echo "zipalign: $ZIPALIGN"
-          echo "apksigner: $APKSIGNER"
-
           mkdir -p artifacts
 
-          # Выравниваем
           ALIGNED="artifacts/app-release-aligned.apk"
           "$ZIPALIGN" -v -p 4 "$APK" "$ALIGNED"
 
-          # Подписываем
           SIGNED="artifacts/app-release-signed.apk"
           "$APKSIGNER" sign \
             --ks android/app/tmp-release.jks \
@@ -122,7 +124,6 @@ jobs:
             --out "$SIGNED" \
             "$ALIGNED"
 
-          # Проверка подписи
           "$APKSIGNER" verify --verbose "$SIGNED"
           echo "✅ Signed APK: $SIGNED"
 
@@ -131,12 +132,10 @@ jobs:
           set -e
           mkdir -p artifacts
 
-          # Если уже был подписанный release от Gradle, возьмём его.
           if [ "${{ steps.locate.outputs.apk_type }}" = "signed" ]; then
             cp -v "${{ steps.locate.outputs.apk_path }}" artifacts/app-release-signed-by-gradle.apk
           fi
 
-          # На всякий случай соберём всё, что релизное
           {
             find android/app/build/outputs/apk/release -type f -name "*release*.apk" -print 2>/dev/null || true
             find android/app/build/outputs/flutter-apk -type f -name "*release*.apk" -print 2>/dev/null || true
@@ -144,7 +143,7 @@ jobs:
             [ -f "$f" ] && cp -v "$f" "artifacts/$(basename "$f")"
           done
 
-          echo "📦 Итог:"
+          echo "📦 Final artifacts:"
           ls -l artifacts
 
       - name: Upload APK artifact
@@ -153,3 +152,4 @@ jobs:
           name: android-apk
           path: artifacts/*.apk
           if-no-files-found: error
+          
