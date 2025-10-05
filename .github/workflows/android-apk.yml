@@ -1,4 +1,4 @@
-name: Build & Sign Android APK (resilient)
+name: 🏗️ Build & Sign Android APK (Stable)
 
 on:
   push:
@@ -8,175 +8,43 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     env:
       CI: true
-      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false"
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx4096m"
       KEY_ALIAS: myKey
       KEY_PASS: myPassword
       STORE_PASS: myPassword
       GRADLE_VERSION: "8.7"
 
     steps:
-      - name: Checkout
+      - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Setup Flutter
+      - name: 🧰 Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
-          cache: true
+          flutter-version: "3.24.3"
 
-      - name: Flutter pub get
+      - name: 📦 Install Dependencies
         run: |
-          flutter clean
           flutter pub get
 
-      - name: Ensure Gradle wrapper (download Gradle ${GRADLE_VERSION})
+      - name: 🧹 Clean project
+        run: flutter clean
+
+      - name: 🔨 Build Release APK
+        run: flutter build apk --release --no-tree-shake-icons
+
+      - name: 📦 Find APK
         run: |
-          set -euo pipefail
-          cd android
-          if [ ! -f "./gradlew" ]; then
-            echo "No gradlew -> downloading Gradle ${GRADLE_VERSION} to create wrapper..."
-            curl -sL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o gradle.zip
-            unzip -q gradle.zip
-            ./gradle-${GRADLE_VERSION}/bin/gradle wrapper --gradle-version ${GRADLE_VERSION}
-          fi
-          chmod +x ./gradlew
-          ./gradlew --version
-          cd ..
+          echo "▶ Collecting APKs"
+          mkdir -p build/publish
+          find build/app/outputs/flutter-apk -type f -name "*.apk" -exec cp {} build/publish/ \;
+          ls -lh build/publish
 
-      # 1) Пытаемся собрать через Gradle. Даже если упадёт — не останавливаем job.
-      - name: Build via Gradle (assembleRelease, tolerant)
-        id: build_gradle
-        continue-on-error: true
-        run: |
-          set -e
-          cd android
-          echo "🚀 Gradle assembleRelease (no FS watcher)…"
-          ./gradlew :app:assembleRelease --no-watch-fs --info --stacktrace --warning-mode all --console=plain || true
-          echo "📁 outputs:"
-          ls -R app/build/outputs || true
-          cd ..
-
-      # 2) Если Gradle не дал APK — делаем Fallback через flutter build apk
-      - name: Fallback: flutter build apk --release
-        if: ${{ !cancelled() }}
-        run: |
-          set -e
-          # Уже есть релизный APK из Gradle?
-          if find android/app/build/outputs/apk/release -type f -name "*release*.apk" | grep -q . ; then
-            echo "✅ Gradle produced release APKs — fallback не нужен."
-          else
-            echo "🧰 Gradle APK отсутствует — запускаем flutter build apk --release"
-            flutter build apk --release --no-shrink
-            echo "📁 flutter outputs:"
-            ls -R build/app/outputs || true
-          fi
-
-      # 3) Выбираем релизный APK (gradle или flutter)
-      - name: Locate release APK
-        id: locate
-        run: |
-          set -euo pipefail
-          FOUND=$(
-            { find android/app/build/outputs/apk/release -type f -name "*release*.apk" 2>/dev/null || true; \
-              find build/app/outputs/flutter-apk          -type f -name "*release*.apk" 2>/dev/null || true; } \
-            | sort -u
-          )
-          echo "FOUND:"
-          echo "$FOUND"
-
-          # Предпочтение: unsigned Gradle -> signed Gradle -> flutter apk
-          UNSIGNED=$(echo "$FOUND" | grep -E '/android/app/build/outputs/apk/release/.*-unsigned\.apk$' | head -n1 || true)
-          G_SIGNED=$(echo "$FOUND" | grep -E '/android/app/build/outputs/apk/release/.*release[^/]*\.apk$' | grep -v unsigned | head -n1 || true)
-          F_SIGNED=$(echo "$FOUND" | grep -E '/build/app/outputs/flutter-apk/.*release[^/]*\.apk$' | head -n1 || true)
-
-          CHOSEN=""
-          TYPE=""
-          if [ -n "$UNSIGNED" ]; then CHOSEN="$UNSIGNED"; TYPE="unsigned"; fi
-          if [ -z "$CHOSEN" ] && [ -n "$G_SIGNED" ]; then CHOSEN="$G_SIGNED"; TYPE="signed"; fi
-          if [ -z "$CHOSEN" ] && [ -n "$F_SIGNED" ]; then CHOSEN="$F_SIGNED"; TYPE="signed"; fi
-
-          if [ -z "$CHOSEN" ]; then
-            echo "❌ Release APK не найден."
-            echo "🔎 manifest-merger log:"
-            cat android/app/build/outputs/logs/manifest-merger-release-report.txt 2>/dev/null || true
-            exit 1
-          fi
-
-          echo "apk_path=$CHOSEN" >> "$GITHUB_OUTPUT"
-          echo "apk_type=$TYPE"   >> "$GITHUB_OUTPUT"
-          echo "Chosen: $CHOSEN ($TYPE)"
-
-      # 4) Если выбран unsigned — подпишем (zipalign + apksigner)
-      - name: Generate temporary keystore (only if unsigned)
-        if: steps.locate.outputs.apk_type == 'unsigned'
-        run: |
-          set -euo pipefail
-          mkdir -p android/app
-          keytool -genkeypair \
-            -alias "$KEY_ALIAS" \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -keystore android/app/tmp-release.jks \
-            -storepass "$STORE_PASS" \
-            -keypass "$KEY_PASS" \
-            -dname "CN=Temp,O=CI,L=Internet,ST=NA,C=US"
-          echo "✅ Keystore created: android/app/tmp-release.jks"
-
-      - name: Sign APK (if unsigned)
-        if: steps.locate.outputs.apk_type == 'unsigned'
-        run: |
-          set -euo pipefail
-          APK="${{ steps.locate.outputs.apk_path }}"
-          SDK_DIR="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
-          BT_DIR=$(ls -d "$SDK_DIR/build-tools/"* | sort -V | tail -1)
-          ZIPALIGN="$BT_DIR/zipalign"
-          APKSIGNER="$BT_DIR/apksigner"
-
-          mkdir -p artifacts
-          ALIGNED="artifacts/app-release-aligned.apk"
-          "$ZIPALIGN" -v -p 4 "$APK" "$ALIGNED"
-
-          SIGNED="artifacts/app-release-signed.apk"
-          "$APKSIGNER" sign \
-            --ks android/app/tmp-release.jks \
-            --ks-key-alias "$KEY_ALIAS" \
-            --ks-pass pass:"$STORE_PASS" \
-            --key-pass pass:"$KEY_PASS" \
-            --out "$SIGNED" \
-            "$ALIGNED"
-
-          "$APKSIGNER" verify --verbose "$SIGNED"
-          echo "✅ Signed APK: $SIGNED"
-
-      # 5) Собираем всё в artifacts
-      - name: Collect APKs
-        run: |
-          set -e
-          mkdir -p artifacts
-          # Подписанный Gradle
-          if [ "${{ steps.locate.outputs.apk_type }}" = "signed" ]; then
-            cp -v "${{ steps.locate.outputs.apk_path }}" artifacts/$(basename "${{ steps.locate.outputs.apk_path }}")
-          fi
-          # Подписанный нами
-          if [ -f artifacts/app-release-signed.apk ]; then
-            true
-          else
-            # Если подписывали не мы (flutter/gradle уже подписал), положим найденный APK
-            cp -v "${{ steps.locate.outputs.apk_path }}" artifacts/
-          fi
-          echo "📦 Final artifacts:"
-          ls -l artifacts
-
-      - name: Upload APK artifact
+      - name: ☑️ Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk
-          path: artifacts/*.apk
-          if-no-files-found: error
+          name: app-release
+          path: build/publish/*.apk
