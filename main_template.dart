@@ -4,7 +4,6 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:crypto/crypto.dart' as crypto;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -104,7 +103,7 @@ class NotesApp extends StatelessWidget {
   }
 }
 
-/* ===================== MODELS ===================== */
+/* ===================== МОДЕЛИ ===================== */
 
 class Note {
   String id;
@@ -182,10 +181,10 @@ class Group {
   String title;
   DateTime updatedAt;
 
-  // Приватность
+  // Приватность (без внешних пакетов)
   bool isPrivate;
   String? salt;     // случайная соль
-  String? passHash; // HMAC-SHA256(password, salt) hex
+  String? passHash; // «быстрый хеш» на основе соли (обфускация)
 
   Group({
     required this.id,
@@ -232,10 +231,10 @@ class Group {
       );
 }
 
-/* ===================== STORE ===================== */
+/* ===================== ХРАНИЛИЩЕ ===================== */
 
 class NotesStore extends ChangeNotifier {
-  static const _prefsKey = 'notes_v6_grid_groups_numbering_private';
+  static const _prefsKey = 'notes_v7_grid_groups_private_no_crypto';
   final List<Note> _notes = [];
   final List<Group> _groups = [];
   bool _loaded = false;
@@ -415,7 +414,7 @@ class NotesStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /* ======== Приватные группы: крипто-вспомогалки и методы ======== */
+  /* ======== Приватные группы: БЕЗ внешних пакетов (обфускация) ======== */
 
   String _randomSalt([int length = 20]) {
     const chars =
@@ -424,17 +423,20 @@ class NotesStore extends ChangeNotifier {
     return List.generate(length, (_) => chars[rnd.nextInt(chars.length)]).join();
   }
 
-  String _hmacSha256(String value, String salt) {
-    final key = utf8.encode(salt);
-    final bytes = utf8.encode(value);
-    final hmac = crypto.Hmac(crypto.sha256, key);
-    final digest = hmac.convert(bytes);
-    return digest.toString(); // hex
+  /// НЕ криптостойко. Цель — избежать зависимости от `crypto` и собрать проект.
+  String _fastHash(String password, String salt) {
+    final bytes = utf8.encode('$salt::$password');
+    int acc = 0;
+    for (var i = 0; i < bytes.length; i++) {
+      acc = (acc + ((bytes[i] + i) * 31)) & 0x7fffffff;
+    }
+    final mixed = bytes.map((b) => b ^ (acc & 0xFF)).toList();
+    return base64Url.encode(mixed);
   }
 
   Future<void> setGroupPassword(Group g, String password) async {
     final salt = _randomSalt(20);
-    final hash = _hmacSha256(password, salt);
+    final hash = _fastHash(password, salt);
     final idx = _groups.indexWhere((x) => x.id == g.id);
     if (idx != -1) {
       _groups[idx] = _groups[idx].copyWith(
@@ -466,8 +468,30 @@ class NotesStore extends ChangeNotifier {
     final salt = g.salt;
     final hash = g.passHash;
     if (salt == null || hash == null) return false;
-    final candidate = _hmacSha256(password, salt);
+    final candidate = _fastHash(password, salt);
     return candidate == hash;
+  }
+
+  /* ===================== ПРЕДСТАВЛЕНИЕ ДАННЫХ ДЛЯ GRID ===================== */
+
+  List<GridItem> getGridItems({String query = ''}) {
+    final q = query.trim().toLowerCase();
+    final singles = _notes.where((n) => n.groupId == null);
+    final gs = _groups.map((g) => GridItem.group(g)).toList();
+    final ns = singles
+        .where((n) => q.isEmpty ? true : n.text.toLowerCase().contains(q))
+        .map((n) => GridItem.note(n))
+        .toList();
+    final filteredGroups = gs.where((gi) {
+      final g = gi.group!;
+      final inTitle = q.isEmpty ? true : g.title.toLowerCase().contains(q);
+      if (inTitle || q.isEmpty) return true;
+      return notesInGroup(g.id).any((n) => n.text.toLowerCase().contains(q));
+    }).toList();
+    filteredGroups
+        .sort((a, b) => b.group!.updatedAt.compareTo(a.group!.updatedAt));
+    ns.sort((a, b) => b.note!.updatedAt.compareTo(a.note!.updatedAt));
+    return [...filteredGroups, ...ns];
   }
 }
 
@@ -702,7 +726,7 @@ class _NotesHomePageState extends State<NotesHomePage> {
       showDragHandle: true,
       isScrollControlled: true,
       builder: (_) => GroupEditor(
-        store: store, // прокидываем для смены/сброса пароля
+        store: store,
         group: g,
         notesProvider: () => store.notesInGroup(g.id),
         onRename: (title) async => store.updateGroup(g.copyWith(title: title)),
@@ -1326,7 +1350,7 @@ class _NoteEditorState extends State<NoteEditor> {
   }
 }
 
-/* ===================== ГРУППА: Лист и действия + приватность ===================== */
+/* ===================== ГРУППА (лист, приватность) ===================== */
 
 class GroupEditor extends StatefulWidget {
   final NotesStore store;
@@ -1407,7 +1431,7 @@ class _GroupEditorState extends State<GroupEditor> {
             ),
             const SizedBox(height: 12),
 
-            // === Приватность группы ===
+            // Приватность
             Card(
               elevation: 0,
               color:
@@ -1574,7 +1598,7 @@ class _GroupEditorState extends State<GroupEditor> {
   }
 }
 
-/* ===================== ДИАЛОГИ / УТИЛИТЫ ===================== */
+/* ===================== УТИЛИТЫ / ДИАЛОГИ ===================== */
 
 class _ErrorPane extends StatelessWidget {
   final String err;
