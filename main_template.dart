@@ -7,7 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await settings.load();
-  FlutterError.onError = (details) => FlutterError.presentError(details);
   runZonedGuarded(() => runApp(const NotesApp()), (e, s) {});
 }
 
@@ -92,7 +91,7 @@ class Note {
   DateTime updatedAt;
   int? colorHex;
   String? groupId;
-  bool numbered; // локальная нумерация
+  bool numbered;
 
   Note({
     required this.id,
@@ -183,7 +182,7 @@ class Group {
 /* ===================== STORE ===================== */
 
 class NotesStore extends ChangeNotifier {
-  static const _prefsKey = 'notes_v4_grid_groups_local_numbering_inline';
+  static const _prefsKey = 'notes_v5_grid_groups_numbering_smart_ui';
   final List<Note> _notes = [];
   final List<Group> _groups = [];
   bool _loaded = false;
@@ -222,7 +221,7 @@ class NotesStore extends ChangeNotifier {
           ),
           Note(
             id: (DateTime.now().microsecondsSinceEpoch + 1).toString(),
-            text: 'Удаление: потяните заметку в левый верхний красный угол.',
+            text: 'Удаление: перетащите заметку в левый верхний красный «Удалить».',
             createdAt: DateTime.now(),
             updatedAt: DateTime.now(),
             colorHex: const Color(0xFFFFD54F).value,
@@ -568,7 +567,7 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 }
 
-/* ===================== SETTINGS SHEET (только тема) ===================== */
+/* ===================== SETTINGS SHEET (кнопки сверху) ===================== */
 
 class SettingsSheet extends StatefulWidget {
   const SettingsSheet({super.key});
@@ -581,49 +580,49 @@ class _SettingsSheetState extends State<SettingsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-        left: 16, right: 16, top: 8,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('Панель управления', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text('Тема приложения', style: Theme.of(context).textTheme.labelLarge),
-          ),
-          const SizedBox(height: 8),
-          SegmentedButton<AppThemeMode>(
-            segments: const [
-              ButtonSegment(value: AppThemeMode.system, label: Text('Системная'), icon: Icon(Icons.phone_android)),
-              ButtonSegment(value: AppThemeMode.light, label: Text('Светлая'), icon: Icon(Icons.wb_sunny_outlined)),
-              ButtonSegment(value: AppThemeMode.dark, label: Text('Тёмная'), icon: Icon(Icons.dark_mode_outlined)),
-            ],
-            selected: {_mode},
-            onSelectionChanged: (s) => setState(() => _mode = s.first),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: () async { await settings.setTheme(_mode); if (context.mounted) Navigator.pop(context); },
-                  icon: const Icon(Icons.save), label: const Text('Сохранить'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom + 12,
+          left: 16, right: 16, top: 8,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Кнопки сохраняем сверху — не перекрываются системой
+            Row(
+              children: [
+                Text('Панель управления', style: Theme.of(context).textTheme.titleLarge),
+                const Spacer(),
+                OutlinedButton.icon(
                   onPressed: () => Navigator.maybePop(context),
                   icon: const Icon(Icons.close), label: const Text('Отмена'),
                 ),
-              ),
-            ],
-          ),
-        ],
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: () async { await settings.setTheme(_mode); if (context.mounted) Navigator.pop(context); },
+                  icon: const Icon(Icons.save), label: const Text('Сохранить'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Тема приложения', style: Theme.of(context).textTheme.labelLarge),
+            ),
+            const SizedBox(height: 8),
+            SegmentedButton<AppThemeMode>(
+              segments: const [
+                ButtonSegment(value: AppThemeMode.system, label: Text('Системная'), icon: Icon(Icons.phone_android)),
+                ButtonSegment(value: AppThemeMode.light, label: Text('Светлая'), icon: Icon(Icons.wb_sunny_outlined)),
+                ButtonSegment(value: AppThemeMode.dark, label: Text('Тёмная'), icon: Icon(Icons.dark_mode_outlined)),
+              ],
+              selected: {_mode},
+              onSelectionChanged: (s) => setState(() => _mode = s.first),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
   }
@@ -724,7 +723,6 @@ class _NoteCardGrid extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
-        // копирование текста — двойной тап
         onDoubleTap: () async {
           await Clipboard.setData(ClipboardData(text: note.text));
           if (context.mounted) {
@@ -737,8 +735,7 @@ class _NoteCardGrid extends StatelessWidget {
             Row(
               children: [
                 Container(
-                  width: 14,
-                  height: 14,
+                  width: 14, height: 14,
                   decoration: BoxDecoration(
                     color: color ?? Colors.transparent,
                     shape: BoxShape.circle,
@@ -887,7 +884,7 @@ class NoteEditor extends StatefulWidget {
 class _NoteEditorState extends State<NoteEditor> {
   late final TextEditingController _ctrl;
   TextEditingValue _lastValue = const TextEditingValue(text: '');
-  bool _internalEdit = false; // защита от рекурсии
+  bool _internalEdit = false;
   Color? _selectedColor;
   bool _detachFromGroup = false;
   bool _numbered = false;
@@ -909,39 +906,115 @@ class _NoteEditorState extends State<NoteEditor> {
     super.dispose();
   }
 
+  /* ==== НУМЕРАЦИЯ: умная вставка, двойной Enter завершает список ==== */
   void _handleTextChanged() {
-    if (_internalEdit || !_numbered) {
-      _lastValue = _ctrl.value;
-      return;
-    }
+    if (_internalEdit) { _lastValue = _ctrl.value; return; }
     final now = _ctrl.value;
-    // Проверим «вставку одной новой строки»
     final old = _lastValue;
-    if (now.text.length == old.text.length + 1 &&
-        now.selection.baseOffset == old.selection.baseOffset + 1 &&
-        now.text.substring(0, now.selection.baseOffset).endsWith('\n')) {
-      // caret после только что вставленного \n
-      final caret = now.selection.baseOffset;
-      final before = now.text.substring(0, caret); // включая \n
-      // посчитаем количество НЕпустых строк до caret
-      final lines = before.split('\n');
-      int count = 0;
-      for (final line in lines) {
-        if (line.trim().isNotEmpty) count++;
+
+    // Только если включена нумерация
+    if (_numbered) {
+      // Случай 1: вставлен ровно один символ и это \n
+      final insertedNewline = now.text.length == old.text.length + 1 &&
+          now.selection.baseOffset == old.selection.baseOffset + 1 &&
+          now.text.substring(0, now.selection.baseOffset).endsWith('\n');
+
+      if (insertedNewline) {
+        final caret = now.selection.baseOffset;
+        // Текст до каретки (включая только что вставленный \n)
+        final before = now.text.substring(0, caret);
+        final lines = before.split('\n');
+
+        // Предыдущая строка (до вставленного \n)
+        final prevLine = lines.length >= 2 ? lines[lines.length - 2] : '';
+
+        // Если предыдущая строка — только номер без текста: "<N>. " => двойной Enter -> завершить список
+        final isEmptyNumbered = RegExp(r'^\d+\. $').hasMatch(prevLine);
+        if (isEmptyNumbered) {
+          // Удаляем "<N>. " из предыдущей строки и выходим без вставки нового номера
+          final startOfPrevLine = before.lastIndexOf('\n', before.length - prevLine.length - 2);
+          final absStart = startOfPrevLine == -1 ? 0 : startOfPrevLine + 1;
+          final absEnd = absStart + prevLine.length; // позиция конца предыдущей строки
+          final newText = now.text.replaceRange(absStart, absEnd, '');
+          final delta = prevLine.length; // сколько удалили
+          _internalEdit = true;
+          _ctrl.value = TextEditingValue(
+            text: newText,
+            selection: TextSelection.collapsed(offset: caret - delta),
+          );
+          _internalEdit = false;
+          _lastValue = _ctrl.value;
+          return;
+        }
+
+        // Иначе — нормальный случай: вставить следующий номер после пустой строки счет обнуляется
+        final lastEmptyBreak = before.substring(0, before.length - 1).lastIndexOf('\n\n'); // двойной \n — граница блоков
+        final blockStart = lastEmptyBreak >= 0 ? lastEmptyBreak + 2 : 0;
+        final blockText = before.substring(blockStart, before.length - 1); // без завершающего \n
+        final blockLines = blockText.isEmpty ? <String>[] : blockText.split('\n');
+
+        // Считаем непустые строки в блоке (игнорируя префикс N. )
+        int nonEmpty = 0;
+        for (final l in blockLines) {
+          final stripped = l.replaceFirst(RegExp(r'^\d+\. '), '');
+          if (stripped.trim().isNotEmpty) nonEmpty++;
+        }
+        final nextNumber = nonEmpty + 1;
+        final insert = '$nextNumber. ';
+        _internalEdit = true;
+        _ctrl.value = TextEditingValue(
+          text: now.text.replaceRange(caret, caret, insert),
+          selection: TextSelection.collapsed(offset: caret + insert.length),
+        );
+        _internalEdit = false;
+        _lastValue = _ctrl.value;
+        return;
       }
-      final number = count + 0; // новая строка станет (count+1)-й непустой; но мы уже на новой пустой, поэтому используем count
-      final insert = '${number + 1}. ';
-      final newText = now.text.replaceRange(caret, caret, insert);
+    }
+
+    _lastValue = now;
+  }
+
+  // При изменении тумблера — если включаем и курсор на пустой/новой строке, вставим "1. "
+  void _maybeInsertFirstNumber() {
+    final v = _ctrl.value;
+    final caret = v.selection.baseOffset;
+    if (caret < 0) return;
+    // Найти начало текущей строки
+    final lineStart = v.text.lastIndexOf('\n', caret - 1) + 1;
+    final lineEnd = v.text.indexOf('\n', caret);
+    final end = lineEnd == -1 ? v.text.length : lineEnd;
+    final line = v.text.substring(lineStart, end);
+    final leftOfCaret = v.text.substring(lineStart, caret);
+
+    final hasNumberPrefix = RegExp(r'^\d+\. ').hasMatch(line);
+    final isAtStart = leftOfCaret.trim().isEmpty;
+
+    if (!hasNumberPrefix && isAtStart) {
+      // Определим стартовый номер: если это новый блок (перед ним пустая строка) => 1
+      // Иначе посчитаем предыдущие непустые строки в блоке
+      final before = v.text.substring(0, lineStart);
+      final lastEmptyBreak = before.lastIndexOf('\n\n');
+      final blockStart = lastEmptyBreak >= 0 ? lastEmptyBreak + 2 : 0;
+      final blockText = before.substring(blockStart);
+      final blockLines = blockText.isEmpty ? <String>[] : blockText.split('\n');
+
+      int nonEmpty = 0;
+      for (final l in blockLines) {
+        final stripped = l.replaceFirst(RegExp(r'^\d+\. '), '');
+        if (stripped.trim().isNotEmpty) nonEmpty++;
+      }
+      final number = nonEmpty == 0 ? 1 : nonEmpty + 1;
+
+      final insert = '$number. ';
       _internalEdit = true;
       _ctrl.value = TextEditingValue(
-        text: newText,
+        text: v.text.replaceRange(lineStart, lineStart, insert),
         selection: TextSelection.collapsed(offset: caret + insert.length),
       );
       _internalEdit = false;
       _lastValue = _ctrl.value;
-      return;
     }
-    _lastValue = now;
   }
 
   @override
@@ -956,30 +1029,36 @@ class _NoteEditorState extends State<NoteEditor> {
           left: 16, right: 16, top: 8,
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // Заголовок + быстрые действия
           Row(children: [
             Text(isNew ? 'Новая заметка' : 'Редактирование', style: Theme.of(context).textTheme.titleLarge),
             const Spacer(),
-            IconButton(
-              tooltip: 'Вставить текущую дату',
+            OutlinedButton.icon(
+              onPressed: () => Navigator.maybePop(context),
+              icon: const Icon(Icons.close),
+              label: const Text('Отмена'),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
               onPressed: () {
-                final now = DateTime.now();
-                final s = '${_pad(now.day)}.${_pad(now.month)}.${now.year} ${_pad(now.hour)}:${_pad(now.minute)}';
-                final sel = _ctrl.selection;
-                final t = _ctrl.text;
-                final start = sel.start >= 0 ? sel.start : t.length;
-                final end = sel.end >= 0 ? sel.end : t.length;
-                _internalEdit = true;
-                _ctrl.text = t.replaceRange(start, end, s);
-                _ctrl.selection = TextSelection.collapsed(offset: start + s.length);
-                _internalEdit = false;
-                _lastValue = _ctrl.value;
+                final text = _ctrl.text.trimRight();
+                var note = (widget.note ?? Note.newNote()).copyWith(
+                  text: text,
+                  numbered: _numbered,
+                  updatedAt: DateTime.now(),
+                  colorHex: _selectedColor?.value,
+                  keepNullColor: _selectedColor == null,
+                );
+                final detached = _detachFromGroup && widget.note?.groupId != null;
+                if (detached) {
+                  note = note.copyWith(groupId: null, setGroupId: true);
+                }
+                Navigator.of(context).pop(NoteActionResult(note: note, detachedFromGroup: detached));
               },
-              icon: const Icon(Icons.calendar_month),
+              icon: const Icon(Icons.save),
+              label: const Text('Сохранить'),
             ),
           ]),
 
-          // Переключатели + КНОПКИ СВЕРХУ
           const SizedBox(height: 6),
           Row(
             children: [
@@ -988,7 +1067,10 @@ class _NoteEditorState extends State<NoteEditor> {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   value: _numbered,
-                  onChanged: (v) => setState(() => _numbered = v),
+                  onChanged: (v) {
+                    setState(() => _numbered = v);
+                    if (v) _maybeInsertFirstNumber(); // при включении — сразу "1. "
+                  },
                   title: const Text('Нумерация строк'),
                 ),
               ),
@@ -1023,41 +1105,7 @@ class _NoteEditorState extends State<NoteEditor> {
             ),
           ),
 
-          // Кнопки Сохранить/Отмена — ПЕРЕД полем, чтобы не перекрывались системной панелью
-          const SizedBox(height: 8),
-          Row(children: [
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: () {
-                  final raw = _ctrl.text.trimRight(); // не трогаем левый, чтобы не ломать номера
-                  final text = raw;
-                  var note = (widget.note ?? Note.newNote()).copyWith(
-                    text: text,
-                    numbered: _numbered,
-                    updatedAt: DateTime.now(),
-                    colorHex: _selectedColor?.value,
-                    keepNullColor: _selectedColor == null,
-                  );
-                  final detached = _detachFromGroup && widget.note?.groupId != null;
-                  if (detached) {
-                    note = note.copyWith(groupId: null, setGroupId: true);
-                  }
-                  Navigator.of(context).pop(NoteActionResult(note: note, detachedFromGroup: detached));
-                },
-                icon: const Icon(Icons.check), label: const Text('Сохранить'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () => Navigator.of(context).maybePop(),
-                icon: const Icon(Icons.close), label: const Text('Отмена'),
-              ),
-            ),
-          ]),
-
           const SizedBox(height: 10),
-          // Само поле — внизу
           TextField(
             controller: _ctrl,
             autofocus: true,
@@ -1067,6 +1115,34 @@ class _NoteEditorState extends State<NoteEditor> {
             textInputAction: TextInputAction.newline,
             decoration: const InputDecoration(hintText: 'Текст заметки…'),
           ),
+
+          if (!isNew) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () async {
+                  final ok = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: const Text('Удалить заметку?'),
+                      content: const Text('Действие необратимо.'),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
+                        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
+                      ],
+                    ),
+                  );
+                  if (ok == true) {
+                    final note = widget.note!;
+                    Navigator.of(context).pop(NoteActionResult(note: note, delete: true));
+                  }
+                },
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Удалить заметку'),
+              ),
+            ),
+          ],
         ]),
       ),
     );
@@ -1114,108 +1190,106 @@ class _GroupEditorState extends State<GroupEditor> {
   Widget build(BuildContext context) {
     final notes = widget.notesProvider();
 
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-        left: 16, right: 16, top: 8,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('Группа', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _title,
-            decoration: const InputDecoration(labelText: 'Заголовок группы', hintText: 'Например: Проект А'),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: () async { await widget.onRename(_title.text.trim()); if (context.mounted) Navigator.pop(context); },
-                  icon: const Icon(Icons.save), label: const Text('Сохранить'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+          left: 16, right: 16, top: 8,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Text('Группа', style: Theme.of(context).textTheme.titleLarge),
+                const Spacer(),
+                OutlinedButton.icon(
                   onPressed: () => Navigator.maybePop(context),
                   icon: const Icon(Icons.close), label: const Text('Отмена'),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text('Заметки в группе (${notes.length}):', style: Theme.of(context).textTheme.labelLarge),
-          ),
-          const SizedBox(height: 8),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 320),
-            child: ListView.separated(
-              itemCount: notes.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (c, i) {
-                final n = notes[i];
-                return Dismissible(
-                  key: ValueKey('ungroup_${n.id}'),
-                  direction: DismissDirection.endToStart,
-                  background: Container(
-                    alignment: Alignment.centerRight,
-                    color: Theme.of(context).colorScheme.primary.withOpacity(.15),
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: const Icon(Icons.call_split),
-                  ),
-                  confirmDismiss: (_) async {
-                    await widget.onUngroupNote(n);
-                    setState(() {});
-                    return false;
-                  },
-                  child: ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.note),
-                    title: Text(
-                      _firstLine(n.text).isEmpty ? 'Без названия' : _firstLine(n.text),
-                      maxLines: 1, overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      _restText(n.text),
-                      maxLines: 1, overflow: TextOverflow.ellipsis,
-                    ),
-                    onTap: () async { await widget.onEditNote(n); setState(() {}); },
-                    trailing: Wrap(spacing: 8, children: [
-                      IconButton(
-                        tooltip: 'Отделить от группы',
-                        icon: const Icon(Icons.call_split),
-                        onPressed: () async { await widget.onUngroupNote(n); setState(() {}); },
-                      ),
-                      IconButton(
-                        tooltip: 'Удалить',
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () async {
-                          final ok = await showDialog<bool>(
-                            context: context,
-                            builder: (_) => AlertDialog(
-                              title: const Text('Удалить заметку?'),
-                              content: const Text('Действие необратимо.'),
-                              actions: [
-                                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
-                                FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
-                              ],
-                            ),
-                          );
-                          if (ok == true) { await widget.onDeleteNote(n); setState(() {}); }
-                        },
-                      ),
-                    ]),
-                  ),
-                );
-              },
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: () async { await widget.onRename(_title.text.trim()); if (context.mounted) Navigator.pop(context); },
+                  icon: const Icon(Icons.save), label: const Text('Сохранить'),
+                ),
+              ],
             ),
-          ),
-        ],
+            const SizedBox(height: 8),
+            TextField(
+              controller: _title,
+              decoration: const InputDecoration(labelText: 'Заголовок группы', hintText: 'Например: Проект А'),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Заметки в группе (${notes.length}):', style: Theme.of(context).textTheme.labelLarge),
+            ),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 320),
+              child: ListView.separated(
+                itemCount: notes.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (c, i) {
+                  final n = notes[i];
+                  return Dismissible(
+                    key: ValueKey('ungroup_${n.id}'),
+                    direction: DismissDirection.endToStart,
+                    background: Container(
+                      alignment: Alignment.centerRight,
+                      color: Theme.of(context).colorScheme.primary.withOpacity(.15),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: const Icon(Icons.call_split),
+                    ),
+                    confirmDismiss: (_) async {
+                      await widget.onUngroupNote(n);
+                      setState(() {});
+                      return false;
+                    },
+                    child: ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.note),
+                      title: Text(
+                        _firstLine(n.text).isEmpty ? 'Без названия' : _firstLine(n.text),
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        _restText(n.text),
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () async { await widget.onEditNote(n); setState(() {}); },
+                      trailing: Wrap(spacing: 8, children: [
+                        IconButton(
+                          tooltip: 'Отделить от группы',
+                          icon: const Icon(Icons.call_split),
+                          onPressed: () async { await widget.onUngroupNote(n); setState(() {}); },
+                        ),
+                        IconButton(
+                          tooltip: 'Удалить',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () async {
+                            final ok = await showDialog<bool>(
+                              context: context,
+                              builder: (_) => AlertDialog(
+                                title: const Text('Удалить заметку?'),
+                                content: const Text('Действие необратимо.'),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
+                                  FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
+                                ],
+                              ),
+                            );
+                            if (ok == true) { await widget.onDeleteNote(n); setState(() {}); }
+                          },
+                        ),
+                      ]),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
