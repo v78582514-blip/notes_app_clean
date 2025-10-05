@@ -4,7 +4,7 @@
         <item name="android:windowBackground">@drawable/launch_background</item>
     </style>
 
-    <!-- Базовая тема после запуска Flutter -->
+    <!-- Базовая тема Activity после старта Flutter -->
     <style name="NormalTheme" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:windowBackground">@android:color/transparent</item>
     </style>
