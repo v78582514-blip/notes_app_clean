@@ -9,14 +9,17 @@ workflows:
     scripts:
       - name: 🔹 Подготовка проекта
         script: |
+          set -euo pipefail
           echo "🧹 Очистка и установка зависимостей..."
           flutter clean
           flutter pub get
 
       - name: 🔹 Сборка релизного APK
         script: |
+          set -euo pipefail
           echo "🏗️ Собираем релиз..."
           BN=$(date +%s)
+          # Собираем универсальный APK (можно заменить на --split-per-abi)
           flutter build apk --release \
             --build-number="$BN" \
             --build-name="1.0.$BN" \
@@ -24,25 +27,44 @@ workflows:
 
       - name: 🔹 Поиск и копирование APK
         script: |
-          echo "🔍 Ищем собранный APK..."
+          set -euo pipefail
+          echo "🔍 Ищем собранные APK..."
           ls -R build/app/outputs || true
 
-          APK_PATH=$(find build/app/outputs -type f -name "app-release.apk" -print -quit)
-          if [ -z "$APK_PATH" ]; then
-            APK_PATH=$(find build/app/outputs -type f -name "*release*.apk" -print -quit)
-          fi
+          mkdir -p build/publish
 
-          if [ -z "$APK_PATH" ]; then
-            echo "❌ Не найден app-release.apk"
+          # Ищем по всем актуальным путям Flutter/AGP:
+          # - build/app/outputs/flutter-apk (современные Flutter)
+          # - build/app/outputs/apk        (старые плагины/шаблоны)
+          mapfile -t APKS < <( \
+            find build/app/outputs/flutter-apk -type f -name "*release*.apk" -print 2>/dev/null; \
+            find build/app/outputs/apk        -type f -name "*release*.apk" -print 2>/dev/null \
+          )
+
+          if [ "${#APKS[@]}" -eq 0 ]; then
+            echo "❌ Не найдено ни одного release APK в стандартных путях."
             exit 1
           fi
 
-          echo "✅ Найден: $APK_PATH"
-          mkdir -p build/publish
-          cp -v "$APK_PATH" build/publish/
+          echo "✅ Найдены APK:"
+          for f in "${APKS[@]}"; do
+            echo "   - $f"
+          done
+
+          echo "📦 Копируем APK в build/publish ..."
+          for f in "${APKS[@]}"; do
+            cp -v "$f" build/publish/
+          done
+
+          echo "🎉 Готово. В build/publish лежат:"
+          ls -l build/publish
 
     artifacts:
+      # Основной путь, куда мы всё сложили
       - build/publish/*.apk
+      # На всякий случай оставим прямые пути (если шаг копирования будет пропущен)
+      - build/app/outputs/flutter-apk/*.apk
+      - build/app/outputs/apk/**/*.apk
 
     triggering:
       events:
