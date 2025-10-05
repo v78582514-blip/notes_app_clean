@@ -9,96 +9,57 @@ workflows:
     scripts:
       - name: 🔹 Подготовка проекта
         script: |
-          set -euo pipefail
+          set -e
           echo "🧹 Очистка и установка зависимостей..."
           flutter clean
           flutter pub get
 
       - name: 🔹 Сборка релизного APK
         script: |
-          set -euo pipefail
-          echo "🏗️ Собираем релиз (flutter build apk)..."
+          set -e
+          echo "🏗️ Собираем именно APK, а не AAB..."
           BN=$(date +%s)
-
-          set +e
           flutter build apk --release \
+            --no-tree-shake-icons \
             --build-number="$BN" \
             --build-name="1.0.$BN" \
-            --no-shrink -v
-          FLUTTER_RC=$?
-          set -e
-
-          if [ $FLUTTER_RC -ne 0 ]; then
-            echo "⚠️ Flutter build apk завершился ошибкой ($FLUTTER_RC). Пробуем собрать gradle-ом с подробными логами..."
-            pushd android >/dev/null
-
-            ./gradlew -v || true
-
-            set +e
-            ./gradlew :app:assembleRelease --info --stacktrace
-            GRADLE_RC=$?
-            set -e
-
-            echo "📁 build outputs под android/app/build/outputs:"
-            ls -R app/build/outputs || true
-
-            echo "📁 build outputs под ../build/app/outputs:"
-            ls -R ../build/app/outputs || true
-
-            echo "📄 Gradle reports (если существуют):"
-            find . -type f -path "*/reports/*" -maxdepth 5 -print || true
-            find . -type f -path "*/outputs/*" -maxdepth 5 -name "*.log" -print -exec tail -n +1 {} \; || true
-
-            popd >/dev/null
-
-            if [ $GRADLE_RC -ne 0 ]; then
-              echo "❌ Gradle тоже упал (код $GRADLE_RC). См. логи выше."
-              exit $GRADLE_RC
-            fi
-          fi
-
-          echo "✅ Сборка завершена (или успешно по фолбэку)."
+            --target-platform android-arm,android-arm64,android-x64
+          echo "✅ Проверим, где появился APK:"
+          find build -type f -name "*.apk"
 
       - name: 🔹 Поиск и копирование APK
         script: |
-          set -euo pipefail
+          set -e
           echo "🔍 Ищем собранные APK..."
-          ls -R build/app/outputs || true
+          ls -R build || true
 
           mkdir -p build/publish
 
-          FOUND_LIST_FILE="$(mktemp)"
-          # Стандартные каталоги Flutter/AGP
-          ( find build/app/outputs/flutter-apk -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
-          ( find build/app/outputs/apk        -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
-          # Про запас: нетипичные пути
-          ( find build -maxdepth 3 -type f -path "*/outputs/*" -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
+          APK_PATH=$(find build -type f -name "*release*.apk" -print -quit)
 
-          # Удалим дубликаты и пустые строки
-          sort -u "$FOUND_LIST_FILE" | sed '/^\s*$/d' > "${FOUND_LIST_FILE}.uniq"
-
-          if [ ! -s "${FOUND_LIST_FILE}.uniq" ]; then
-            echo "❌ Не найдено ни одного release APK в стандартных путях."
-            echo "Отладка: содержимое build/app/outputs:"
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ Не найдено ни одного APK-файла. Проверим build/app/outputs:"
             ls -R build/app/outputs || true
+            echo "⚠️ Попробуем собрать вручную через Gradle..."
+            cd android
+            ./gradlew assembleRelease --stacktrace || true
+            cd ..
+            APK_PATH=$(find build -type f -name "*release*.apk" -print -quit)
+          fi
+
+          if [ -z "$APK_PATH" ]; then
+            echo "🚨 Ошибка: APK не найден после всех попыток."
             exit 1
           fi
 
-          echo "✅ Найдены APK:"
-          cat "${FOUND_LIST_FILE}.uniq"
+          echo "✅ Найден APK: $APK_PATH"
+          cp -v "$APK_PATH" build/publish/
 
-          echo "📦 Копируем APK в build/publish ..."
-          while IFS= read -r apk; do
-            cp -v "$apk" build/publish/
-          done < "${FOUND_LIST_FILE}.uniq"
-
-          echo "🎉 Готово. В build/publish лежат:"
-          ls -l build/publish
+          echo "🎉 Файл успешно скопирован в build/publish"
 
     artifacts:
       - build/publish/*.apk
-      - build/app/outputs/flutter-apk/*.apk
-      - build/app/outputs/apk/**/*.apk
+      - build/app/outputs/**/*.apk
       - build/**/outputs/**/*.apk
 
     triggering:
@@ -108,3 +69,4 @@ workflows:
         - pattern: "*"
           include: true
           source: true
+          
