@@ -4,6 +4,9 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
+
+/* ===================== BOOT ===================== */
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -11,7 +14,7 @@ Future<void> main() async {
   runZonedGuarded(() => runApp(const NotesApp()), (e, s) {});
 }
 
-/* ===================== SETTINGS (только тема) ===================== */
+/* ===================== SETTINGS (theme only) ===================== */
 
 final settings = SettingsStore();
 
@@ -94,7 +97,9 @@ class NotesApp extends StatelessWidget {
           ),
           darkTheme: ThemeData.dark(useMaterial3: true).copyWith(
             colorScheme: ColorScheme.fromSeed(
-                seedColor: Colors.indigo, brightness: Brightness.dark),
+              seedColor: Colors.indigo,
+              brightness: Brightness.dark,
+            ),
           ),
           home: const NotesHomePage(),
         );
@@ -103,7 +108,7 @@ class NotesApp extends StatelessWidget {
   }
 }
 
-/* ===================== МОДЕЛИ ===================== */
+/* ===================== MODELS ===================== */
 
 class Note {
   String id;
@@ -184,7 +189,7 @@ class Group {
   // Приватность (без внешних пакетов)
   bool isPrivate;
   String? salt;     // случайная «соль»
-  String? passHash; // лёгкая обфускация
+  String? passHash; // лёгкая обфускация (не для чувствительных данных)
 
   Group({
     required this.id,
@@ -234,7 +239,7 @@ class Group {
 /* ===================== STORE ===================== */
 
 class NotesStore extends ChangeNotifier {
-  static const _prefsKey = 'notes_v8_privacy_fix_numbering_fix';
+  static const _prefsKey = 'notes_v9_privacy_auto_save_share_numbering';
   final List<Note> _notes = [];
   final List<Group> _groups = [];
   bool _loaded = false;
@@ -265,12 +270,8 @@ class NotesStore extends ChangeNotifier {
           final gs = (decoded['groups'] as List? ?? [])
               .map((e) => Group.fromJson(Map<String, dynamic>.from(e)))
               .toList();
-          _notes
-            ..clear()
-            ..addAll(ns);
-          _groups
-            ..clear()
-            ..addAll(gs);
+          _notes..clear()..addAll(ns);
+          _groups..clear()..addAll(gs);
         }
       }
       if (_notes.isEmpty) {
@@ -366,7 +367,10 @@ class NotesStore extends ChangeNotifier {
     final idx = _notes.indexWhere((n) => n.id == noteId);
     if (idx != -1) {
       _notes[idx] = _notes[idx].copyWith(
-          groupId: groupId, setGroupId: true, updatedAt: DateTime.now());
+        groupId: groupId,
+        setGroupId: true,
+        updatedAt: DateTime.now(),
+      );
       await _persist();
       notifyListeners();
     }
@@ -376,7 +380,10 @@ class NotesStore extends ChangeNotifier {
     final idx = _notes.indexWhere((n) => n.id == noteId);
     if (idx != -1) {
       _notes[idx] = _notes[idx].copyWith(
-          groupId: null, setGroupId: true, updatedAt: DateTime.now());
+        groupId: null,
+        setGroupId: true,
+        updatedAt: DateTime.now(),
+      );
       await _persist();
       notifyListeners();
     }
@@ -421,7 +428,7 @@ class NotesStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /* ======== Приватные группы: БЕЗ внешних пакетов (обфускация) ======== */
+  /* ======== Private groups (no external crypto) ======== */
 
   String _randomSalt([int length = 20]) {
     const chars =
@@ -430,7 +437,7 @@ class NotesStore extends ChangeNotifier {
     return List.generate(length, (_) => chars[rnd.nextInt(chars.length)]).join();
   }
 
-  /// НЕ криптостойко. Цель — избежать зависимости от `crypto` и собрать проект.
+  /// НЕ криптостойко (для отсутствия внешних пакетов).
   String _fastHash(String password, String salt) {
     final bytes = utf8.encode('$salt::$password');
     int acc = 0;
@@ -479,7 +486,7 @@ class NotesStore extends ChangeNotifier {
     return candidate == hash;
   }
 
-  /* ===================== ДАННЫЕ ДЛЯ GRID ===================== */
+  /* ======== Data for grid ======== */
 
   List<GridItem> getGridItems({String query = ''}) {
     final q = query.trim().toLowerCase();
@@ -690,9 +697,10 @@ class _NotesHomePageState extends State<NotesHomePage> {
 
     if (result.delete) {
       final ok = await _confirm(
-          title: 'Удалить заметку?',
-          message: 'Действие необратимо.',
-          confirmText: 'Удалить');
+        title: 'Удалить заметку?',
+        message: 'Действие необратимо.',
+        confirmText: 'Удалить',
+      );
       if (ok == true) {
         await store.deleteNote(result.note.id);
       }
@@ -749,10 +757,11 @@ class _NotesHomePageState extends State<NotesHomePage> {
     );
   }
 
-  Future<bool?> _confirm(
-      {required String title,
-      required String message,
-      String confirmText = 'ОК'}) {
+  Future<bool?> _confirm({
+    required String title,
+    required String message,
+    String confirmText = 'ОК',
+  }) {
     return showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -845,7 +854,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
   }
 }
 
-/* ===================== КАРТОЧКИ В СЕТКЕ ===================== */
+/* ===================== GRID CARDS ===================== */
 
 class _NoteCardGrid extends StatelessWidget {
   final Note note;
@@ -951,12 +960,13 @@ class _GroupCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Text(group.title,
-                        style: textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.bold)),
+                    Text(
+                      group.title,
+                      style: textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.bold),
+                    ),
                     const SizedBox(width: 8),
-                    if (group.isPrivate)
-                      const Icon(Icons.lock, size: 16),
+                    if (group.isPrivate) const Icon(Icons.lock, size: 16),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -1090,7 +1100,7 @@ class _DeleteCorner extends StatelessWidget {
   }
 }
 
-/* ===================== РЕДАКТОР ЗАМЕТКИ (фикс нумерации) ===================== */
+/* ===================== NOTE EDITOR (numbering + share) ===================== */
 
 class NoteActionResult {
   final Note note;
@@ -1111,6 +1121,7 @@ class NoteEditor extends StatefulWidget {
 class _NoteEditorState extends State<NoteEditor> {
   late Note _model;
   late TextEditingController _text;
+  late NumberingFormatter _numberingFormatter;
 
   @override
   void initState() {
@@ -1118,6 +1129,7 @@ class _NoteEditorState extends State<NoteEditor> {
     _model = widget.note?.copyWith() ?? Note.newNote();
     _text = TextEditingController(text: _model.text);
     _text.addListener(_onChanged);
+    _numberingFormatter = NumberingFormatter(() => _model.numbered);
   }
 
   @override
@@ -1140,23 +1152,6 @@ class _NoteEditorState extends State<NoteEditor> {
     });
   }
 
-  KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    final isModifier = HardwareKeyboard.instance.isControlPressed ||
-        HardwareKeyboard.instance.isMetaPressed;
-    if (isModifier &&
-        HardwareKeyboard.instance.isShiftPressed &&
-        event.logicalKey == LogicalKeyboardKey.keyL) {
-      _toggleNumbering();
-      return KeyEventResult.handled;
-    }
-    if (_model.numbered && event.logicalKey == LogicalKeyboardKey.enter) {
-      _insertNextNumberOnNewline();
-      return KeyEventResult.handled;
-    }
-    return KeyEventResult.ignored;
-  }
-
   /// Вставляет "1. " в НАЧАЛО текущей строки, если там ещё нет цифры.
   void _ensureFirstNumberAlways() {
     final sel = _text.selection;
@@ -1175,34 +1170,10 @@ class _NoteEditorState extends State<NoteEditor> {
     }
   }
 
-  void _insertNextNumberOnNewline() {
-    final sel = _text.selection;
-    final text = _text.text;
-    final idx = sel.start;
-    final prevLine = _lineBefore(text, idx);
-    final match = RegExp(r'^(\s*)(\d+)\.(\s*)').firstMatch(prevLine);
-    if (match != null) {
-      final indent = match.group(1) ?? '';
-      final n = int.tryParse(match.group(2)!) ?? 1;
-      final spaces = (match.group(3) ?? ' ').isEmpty ? ' ' : match.group(3)!;
-      final insert = '\n$indent${n + 1}.$spaces';
-      _text.value = _text.value.copyWith(
-        text: text.replaceRange(idx, idx, insert),
-        selection: TextSelection.collapsed(offset: idx + insert.length),
-      );
-    } else {
-      const insert = '\n1. ';
-      _text.value = _text.value.copyWith(
-        text: text.replaceRange(idx, idx, insert),
-        selection: TextSelection.collapsed(offset: idx + insert.length),
-      );
-    }
-  }
-
   int _lineStartIndex(String text, int pos) {
     final prev = text.lastIndexOf('\n', pos - 1);
     return prev == -1 ? 0 : prev + 1;
-  }
+    }
 
   String _lineAt(String text, int pos) {
     final start = _lineStartIndex(text, pos);
@@ -1216,6 +1187,12 @@ class _NoteEditorState extends State<NoteEditor> {
     final j = text.lastIndexOf('\n', i - 1);
     final start = j == -1 ? 0 : j + 1;
     return text.substring(start, i);
+  }
+
+  Future<void> _share() async {
+    final content = _text.text; // только текст, как есть
+    if (content.trim().isEmpty) return;
+    await Share.share(content);
   }
 
   @override
@@ -1244,12 +1221,12 @@ class _NoteEditorState extends State<NoteEditor> {
                       ButtonSegment(value: true, label: Text('Нумер.')),
                     ],
                     selected: <bool>{_model.numbered},
-                    onSelectionChanged: (s) => _toggleNumbering(),
+                    onSelectionChanged: (_) => _toggleNumbering(),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Tooltip(
-                  message: 'Скопировать текст (как есть)',
+                  message: 'Копировать',
                   child: IconButton(
                     icon: const Icon(Icons.copy_all),
                     onPressed: () async {
@@ -1262,18 +1239,23 @@ class _NoteEditorState extends State<NoteEditor> {
                     },
                   ),
                 ),
+                Tooltip(
+                  message: 'Поделиться (только текст)',
+                  child: IconButton(
+                    icon: const Icon(Icons.ios_share),
+                    onPressed: _share,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 8),
-            Focus(
-              onKeyEvent: _handleKey,
-              child: TextField(
-                controller: _text,
-                maxLines: 12,
-                decoration: const InputDecoration(
-                  hintText:
-                      'Текст заметки...\nПодсказка: Ctrl/Cmd + Shift + L — переключить нумерацию',
-                ),
+            TextField(
+              controller: _text,
+              maxLines: 12,
+              inputFormatters: <TextInputFormatter>[_numberingFormatter],
+              decoration: const InputDecoration(
+                hintText:
+                    'Текст заметки...\nПодсказка: включите «Нумер.» — Enter добавляет следующий номер',
               ),
             ),
             const SizedBox(height: 8),
@@ -1360,7 +1342,53 @@ class _NoteEditorState extends State<NoteEditor> {
   }
 }
 
-/* ===================== ГРУППА (фикс приватности) ===================== */
+/* === ВСТАВКА: inputFormatter для нумерации, работает и на мобильных === */
+
+class NumberingFormatter extends TextInputFormatter {
+  final bool Function() isEnabled;
+  NumberingFormatter(this.isEnabled);
+
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    if (!isEnabled()) return newValue;
+
+    final old = oldValue.text;
+    final neu = newValue.text;
+    final insPos = newValue.selection.baseOffset;
+
+    // Обработка простого Enter: разница на 1 символ, это '\n' прямо перед курсором
+    if (insPos > 0 && neu.length == old.length + 1 && neu[insPos - 1] == '\n') {
+      // Найти предыдущую строку (до вставленного \n)
+      final prevNL = neu.lastIndexOf('\n', insPos - 2);
+      final start = prevNL == -1 ? 0 : prevNL + 1;
+      final prevLine = neu.substring(start, insPos - 1);
+
+      final match = RegExp(r'^(\s*)(\d+)\.(\s*)').firstMatch(prevLine);
+      String indent = '';
+      int nextNum = 1;
+      String spaces = ' ';
+
+      if (match != null) {
+        indent = match.group(1) ?? '';
+        nextNum = (int.tryParse(match.group(2)!) ?? 0) + 1;
+        final s = match.group(3) ?? ' ';
+        spaces = s.isEmpty ? ' ' : s;
+      }
+
+      final insert = '$indent$nextNum.$spaces';
+      final textWith = neu.replaceRange(insPos, insPos, insert);
+      final newSelection =
+          TextSelection.collapsed(offset: insPos + insert.length);
+      return TextEditingValue(
+          text: textWith, selection: newSelection, composing: TextRange.empty);
+    }
+
+    return newValue;
+  }
+}
+
+/* ===================== GROUP EDITOR (auto-save, no Save button) ===================== */
 
 class GroupEditor extends StatefulWidget {
   final NotesStore store;
@@ -1388,7 +1416,8 @@ class GroupEditor extends StatefulWidget {
 
 class _GroupEditorState extends State<GroupEditor> {
   late TextEditingController _title;
-  late Group _group; // локальная актуальная копия
+  late Group _group;
+  Timer? _debounce;
 
   @override
   void initState() {
@@ -1399,12 +1428,21 @@ class _GroupEditorState extends State<GroupEditor> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _title.dispose();
     super.dispose();
   }
 
   void _refreshLocalGroup() {
     _group = widget.store.groupById(_group.id) ?? _group;
+  }
+
+  void _onTitleChanged(String v) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () async {
+      await widget.onRename(v.trim().isEmpty ? 'Группа' : v.trim());
+      if (mounted) setState(_refreshLocalGroup);
+    });
   }
 
   @override
@@ -1424,28 +1462,13 @@ class _GroupEditorState extends State<GroupEditor> {
           children: [
             const _Grabber(),
             const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _title,
-                    decoration: const InputDecoration(
-                      labelText: 'Название группы',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton.icon(
-                  icon: const Icon(Icons.save),
-                  label: const Text('Сохранить'),
-                  onPressed: () async {
-                    await widget.onRename(_title.text.trim().isEmpty
-                        ? 'Группа'
-                        : _title.text.trim());
-                    setState(() => _refreshLocalGroup());
-                  },
-                ),
-              ],
+            TextField(
+              controller: _title,
+              onChanged: _onTitleChanged, // автосохранение
+              decoration: const InputDecoration(
+                labelText: 'Название группы',
+                helperText: 'Сохраняется автоматически',
+              ),
             ),
             const SizedBox(height: 12),
 
@@ -1484,10 +1507,10 @@ class _GroupEditorState extends State<GroupEditor> {
                                 return;
                               }
                               await widget.store.setGroupPassword(_group, pass);
-                              setState(() => _refreshLocalGroup());
+                              setState(_refreshLocalGroup);
                             } else {
                               await widget.store.clearGroupPassword(_group);
-                              setState(() => _refreshLocalGroup());
+                              setState(_refreshLocalGroup);
                             }
                           },
                         ),
@@ -1516,7 +1539,7 @@ class _GroupEditorState extends State<GroupEditor> {
                                         content: Text('Пароль обновлён')),
                                   );
                                 }
-                                setState(() => _refreshLocalGroup());
+                                setState(_refreshLocalGroup);
                               },
                             ),
                           ),
@@ -1534,7 +1557,7 @@ class _GroupEditorState extends State<GroupEditor> {
                                             Text('Группа теперь публичная')),
                                   );
                                 }
-                                setState(() => _refreshLocalGroup());
+                                setState(_refreshLocalGroup);
                               },
                             ),
                           ),
@@ -1582,6 +1605,9 @@ class _GroupEditorState extends State<GroupEditor> {
                               await widget.onDeleteNote(n);
                               setState(() {});
                               break;
+                            case 'share':
+                              await Share.share(n.text);
+                              break;
                           }
                         },
                         itemBuilder: (_) => const [
@@ -1592,6 +1618,8 @@ class _GroupEditorState extends State<GroupEditor> {
                               child: Text('Исключить из группы')),
                           PopupMenuItem(
                               value: 'delete', child: Text('Удалить')),
+                          PopupMenuItem(
+                              value: 'share', child: Text('Поделиться')),
                         ],
                       ),
                     );
@@ -1613,7 +1641,7 @@ class _GroupEditorState extends State<GroupEditor> {
   }
 }
 
-/* ===================== УТИЛИТЫ / ДИАЛОГИ ===================== */
+/* ===================== COMMON WIDGETS ===================== */
 
 class _ErrorPane extends StatelessWidget {
   final String err;
@@ -1737,4 +1765,3 @@ class GridItem {
   bool get isNote => note != null;
   bool get isGroup => group != null;
 }
-
