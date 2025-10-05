@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      CI: true
+      GRADLE_OPTS: -Dorg.gradle.daemon=false
 
     steps:
       - name: Checkout
@@ -19,7 +22,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Flutter
+      - name: Setup Flutter (stable)
         uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -28,18 +31,66 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
-      - name: Build APK (release)
+      - name: Build APK (flutter)
+        continue-on-error: true
         run: |
+          echo "▶ flutter build apk --release"
           flutter clean
           flutter build apk --release
-          echo "Outputs:"
-          find build -type f -name "*.apk" -print
+          echo "🔎 find APKs after flutter build:"
+          find build -type f -name "*.apk" -print || true
+
+      - name: Fallback build (Gradle assembleRelease)
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          echo "▶ Gradle fallback: :app:assembleRelease"
+          cd android
+          # если wrapper отсутствует — создадим
+          if [ ! -f "./gradlew" ]; then
+            echo "gradlew not found, generating wrapper..."
+            sudo apt-get update && sudo apt-get install -y gradle
+            gradle wrapper --gradle-version 8.7
+          fi
+          chmod +x ./gradlew
+          ./gradlew -v || true
+          ./gradlew :app:assembleRelease --info --stacktrace || true
+          echo "📁 android/app/build/outputs tree:"
+          ls -R app/build/outputs || true
+
+      - name: Collect APKs
+        run: |
+          echo "▶ Collecting APKs"
+          mkdir -p artifacts
+          # Все типичные места
+          ( find build/app/outputs/flutter-apk -type f -name "*release*.apk" -print 2>/dev/null || true )
+          ( find android/app/build/outputs/apk -type f -name "*release*.apk" -print 2>/dev/null || true )
+          ( find build -maxdepth 4 -type f -name "*release*.apk" -print 2>/dev/null || true ) \
+            | sort -u | tee found_apks.txt
+
+          if [ ! -s found_apks.txt ]; then
+            echo "❌ Не найдено ни одного release APK."
+            echo "🔎 build/app/outputs:"
+            ls -R build/app/outputs || true
+            echo "🔎 android/app/build/outputs:"
+            ls -R android/app/build/outputs || true
+            exit 1
+          fi
+
+          echo "✅ Найдены APK:"
+          cat found_apks.txt
+
+          while IFS= read -r apk; do
+            cp -v "$apk" artifacts/
+          done < found_apks.txt
+
+          echo "📦 Итоговые файлы:"
+          ls -l artifacts
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
-          path: |
-            build/app/outputs/flutter-apk/*.apk
-            build/**/outputs/**/*.apk
-          if-no-files-found: warn
+          path: artifacts/*.apk
+          if-no-files-found: error
+          
