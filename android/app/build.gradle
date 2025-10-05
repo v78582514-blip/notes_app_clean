@@ -1,26 +1,24 @@
-// android/app/build.gradle
-
 plugins {
     id "com.android.application"
     id "kotlin-android"
-    // этот плагин подключается Flutter'ом из settings.gradle
+    // подключается через settings.gradle (flutter)
     id "dev.flutter.flutter-gradle-plugin"
 }
 
 android {
-    namespace "com.example.notice_app"       // при желании поменяй на свой пакет
-    compileSdk 34
+    namespace "com.example.notice_app"   // при необходимости поменяй на свой
+    compileSdk 36
 
     defaultConfig {
-        applicationId "com.example.notice_app" // при желании поменяй на свой пакет
+        applicationId "com.example.notice_app" // тоже можно поменять
         minSdk 23
-        targetSdk 34
+        targetSdk 36
         versionCode 1
         versionName "1.0"
         multiDexEnabled true
     }
 
-    // ⚠️ Используем автосозданный keystore (workflow кладёт его в android/app/auto-release.jks)
+    // Используем keystore, который CI создаёт как android/app/auto-release.jks
     signingConfigs {
         release {
             storeFile file("auto-release.jks")
@@ -32,19 +30,15 @@ android {
 
     buildTypes {
         release {
-            // подпись релиза этим ключом
             signingConfig signingConfigs.release
-            // без шринка/минификации — проще для CI
             minifyEnabled false
             shrinkResources false
         }
         debug {
-            // можно подписывать тем же ключом, чтобы ставилось на устройство
             signingConfig signingConfigs.release
         }
     }
 
-    // Для современных плагинов/AGP
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -60,4 +54,10 @@ flutter {
 
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
+
+    // ВАЖНО: чтобы был доступен Theme.Material3.DayNight.NoActionBar
+    implementation "com.google.android.material:material:1.12.0"
+
+    // Рекомендуется иметь core-ktx
+    implementation "androidx.core:core-ktx:1.13.1"
 }
