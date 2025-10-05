@@ -17,14 +17,47 @@ workflows:
       - name: 🔹 Сборка релизного APK
         script: |
           set -euo pipefail
-          echo "🏗️ Собираем релиз..."
+          echo "🏗️ Собираем релиз (flutter build apk)..."
           BN=$(date +%s)
-          # Универсальный APK (если нужны отдельные ABIs — см. комментарий ниже)
+
+          set +e
           flutter build apk --release \
             --build-number="$BN" \
             --build-name="1.0.$BN" \
-            --no-shrink
-          echo "✅ Сборка завершена."
+            --no-shrink -v
+          FLUTTER_RC=$?
+          set -e
+
+          if [ $FLUTTER_RC -ne 0 ]; then
+            echo "⚠️ Flutter build apk завершился ошибкой ($FLUTTER_RC). Пробуем собрать gradle-ом с подробными логами..."
+            pushd android >/dev/null
+
+            ./gradlew -v || true
+
+            set +e
+            ./gradlew :app:assembleRelease --info --stacktrace
+            GRADLE_RC=$?
+            set -e
+
+            echo "📁 build outputs под android/app/build/outputs:"
+            ls -R app/build/outputs || true
+
+            echo "📁 build outputs под ../build/app/outputs:"
+            ls -R ../build/app/outputs || true
+
+            echo "📄 Gradle reports (если существуют):"
+            find . -type f -path "*/reports/*" -maxdepth 5 -print || true
+            find . -type f -path "*/outputs/*" -maxdepth 5 -name "*.log" -print -exec tail -n +1 {} \; || true
+
+            popd >/dev/null
+
+            if [ $GRADLE_RC -ne 0 ]; then
+              echo "❌ Gradle тоже упал (код $GRADLE_RC). См. логи выше."
+              exit $GRADLE_RC
+            fi
+          fi
+
+          echo "✅ Сборка завершена (или успешно по фолбэку)."
 
       - name: 🔹 Поиск и копирование APK
         script: |
@@ -35,10 +68,10 @@ workflows:
           mkdir -p build/publish
 
           FOUND_LIST_FILE="$(mktemp)"
-          # Ищем во всех стандартных каталогах Flutter/AGP
+          # Стандартные каталоги Flutter/AGP
           ( find build/app/outputs/flutter-apk -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
           ( find build/app/outputs/apk        -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
-          # Дополнительно просканируем build/**/outputs на случай нетипичных путей
+          # Про запас: нетипичные пути
           ( find build -maxdepth 3 -type f -path "*/outputs/*" -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
 
           # Удалим дубликаты и пустые строки
@@ -63,9 +96,7 @@ workflows:
           ls -l build/publish
 
     artifacts:
-      # Основной каталог, куда мы сложили артефакты
       - build/publish/*.apk
-      # На всякий случай — прямые пути, если выше пропустят копирование
       - build/app/outputs/flutter-apk/*.apk
       - build/app/outputs/apk/**/*.apk
       - build/**/outputs/**/*.apk
@@ -77,4 +108,3 @@ workflows:
         - pattern: "*"
           include: true
           source: true
-          
