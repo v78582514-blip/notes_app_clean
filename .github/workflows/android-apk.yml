@@ -10,7 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CI: true
-      GRADLE_OPTS: -Dorg.gradle.daemon=false
+      # Отключаем файловый watcher Gradle (фикс "Already watching path")
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false"
       KEY_ALIAS: myKey
       KEY_PASS: myPassword
       STORE_PASS: myPassword
@@ -37,7 +38,7 @@ jobs:
           flutter clean
           flutter pub get
 
-      # Важно: НЕ ставим gradle через apt. Скачиваем нужную версию 8.7 и ей создаём wrapper
+      # Не устанавливаем gradle через apt (он древний). Скачиваем 8.7 и создаём wrapper.
       - name: Ensure Gradle wrapper (download Gradle ${GRADLE_VERSION})
         run: |
           set -euo pipefail
@@ -57,7 +58,8 @@ jobs:
         run: |
           set -euo pipefail
           cd android
-          ./gradlew :app:assembleRelease --info --stacktrace
+          echo "🚀 Building APK (disable file system watcher)..."
+          ./gradlew :app:assembleRelease --no-watch-fs --info --stacktrace
           echo "📁 outputs tree:"
           ls -R app/build/outputs || true
           cd ..
@@ -152,4 +154,3 @@ jobs:
           name: android-apk
           path: artifacts/*.apk
           if-no-files-found: error
-          
