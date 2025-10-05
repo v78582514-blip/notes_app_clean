@@ -1,45 +1,27 @@
 workflows:
   android_release:
     name: Android Release APK
-    max_build_duration: 60
     environment:
       flutter: stable
       xcode: latest
       android_signing:
-        - keystore_reference  # убери, если не подписываешь. Иначе настрой в Codemagic → App settings → Code signing
+        - my-release-keystore   # <-- ИМЕННО то имя, которое задал(а) в Code signing
     scripts:
       - name: Flutter pub get
         script: |
           flutter clean
           flutter pub get
-      - name: Build release APK
+      - name: Build release APK (signed)
         script: |
           BN=$(date +%s)
           flutter build apk --release --build-number="$BN" --build-name="1.0.$BN" --no-shrink
       - name: Collect APK artifact
         script: |
-          echo "List outputs:"
-          ls -R build/app/outputs || true
-
+          echo "List outputs:"; ls -R build/app/outputs || true
           APK_PATH=$(find build/app/outputs -type f -name "app-release.apk" -print -quit)
-          if [ -z "$APK_PATH" ]; then
-            APK_PATH=$(find build/app/outputs -type f -name "*release*.apk" -print -quit)
-          fi
-
-          if [ -z "$APK_PATH" ]; then
-            echo "❌ APK not found"
-            exit 1
-          fi
-
-          echo "✅ Found: $APK_PATH"
+          if [ -z "$APK_PATH" ]; then APK_PATH=$(find build/app/outputs -type f -name "*release*.apk" -print -quit); fi
+          if [ -z "$APK_PATH" ]; then echo "❌ APK not found"; exit 1; fi
           mkdir -p build/publish
           cp -v "$APK_PATH" build/publish/
     artifacts:
       - build/publish/*.apk
-    triggering:
-      events:
-        - push
-      branch_patterns:
-        - pattern: "*"
-          include: true
-          source: true
