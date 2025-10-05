@@ -1,102 +1,45 @@
 workflows:
-  debug_apk:
-    name: Debug APK (diagnose + fallback fetch)
+  android_release:
+    name: Android Release APK
     max_build_duration: 60
     environment:
       flutter: stable
-      vars:
-        APP_NAME: notice_app
-        PACKAGE_NAME: com.example.notice_app
+      xcode: latest
+      android_signing:
+        - keystore_reference  # убери, если не подписываешь. Иначе настрой в Codemagic → App settings → Code signing
     scripts:
-      - name: Diagnose repo on Codemagic
+      - name: Flutter pub get
         script: |
-          set -e
-          echo "== CM_SOURCE_DIR = $CM_SOURCE_DIR"
-          echo "== PWD           = $(pwd)"
-          echo "== whoami        = $(whoami)"
-          echo "== uname -a      = $(uname -a)"
-          echo "== git remotes =="
-          git remote -v || true
-          echo "== git branch  =="
-          git branch -a || true
-          echo "== git log -1 =="
-          git log -1 --oneline || true
-
-          echo "== TREE: root (level 1) =="
-          ls -la "$CM_SOURCE_DIR" || true
-
-          echo "== TREE: level 2 =="
-          find "$CM_SOURCE_DIR" -maxdepth 2 -type f -printf "%p\n" | sort || true
-
-          echo "== TREE: level 4 =="
-          find "$CM_SOURCE_DIR" -maxdepth 4 -type f -printf "%p\n" | sort || true
-
-      - name: Create Flutter project
-        script: |
-          set -e
-          SAFE_NAME="${APP_NAME// /_}"
-          SAFE_NAME="$(echo "$SAFE_NAME" | tr '[:upper:]' '[:lower:]')"
-          SAFE_NAME="$(echo "$SAFE_NAME" | sed 's/[^a-z0-9_]/_/g')"
-          [[ "$SAFE_NAME" =~ ^[0-9] ]] && SAFE_NAME="app_$SAFE_NAME"
-          echo "Using project name: $SAFE_NAME"
-          flutter create --org "${PACKAGE_NAME}" --project-name "$SAFE_NAME" --overwrite .
-
-      - name: Provide lib/main.dart (copy if present, else download from raw)
-        script: |
-          set -e
-          mkdir -p lib
-
-          SRC=""
-          if [ -f "$CM_SOURCE_DIR/main_template.dart" ]; then
-            echo "✅ Found main_template.dart in repo root"
-            SRC="$CM_SOURCE_DIR/main_template.dart"
-            cp -f "$SRC" lib/main.dart
-          elif [ -f "$CM_SOURCE_DIR/lib/main.dart" ]; then
-            echo "✅ Found lib/main.dart in repo"
-            SRC="$CM_SOURCE_DIR/lib/main.dart"
-            cp -f "$SRC" lib/main.dart
-          else
-            RAW_URL="https://raw.githubusercontent.com/v78582514-blip/notes_app_clean/main/main_template.dart"
-            echo "❌ No local template. Trying to download from RAW URL:"
-            echo "   $RAW_URL"
-            curl -fL --retry 3 --retry-delay 2 "$RAW_URL" -o lib/main.dart
-          fi
-
-          echo "== HEAD of lib/main.dart =="
-          sed -n '1,80p' lib/main.dart || true
-
-          # Валидация: точно наш код «Заметок», не дефолтный счётчик
-          if grep -qi "class NotesApp" lib/main.dart && grep -qi "class NotesHomePage" lib/main.dart; then
-            echo "✅ Notes code detected."
-          else
-            echo "❌ Notes markers not found (class NotesApp/NotesHomePage)."
-            echo "   lib/main.dart content head above. Investigate file placement."
-            exit 1
-          fi
-          if grep -qiE "Counter|MyHomePage" lib/main.dart; then
-            echo "❌ Counter template strings found. Aborting."
-            exit 1
-          fi
-
-      - name: Install dependencies
-        script: |
-          set -e
-          flutter pub add shared_preferences || true
-          flutter pub get
-
-      - name: Build release APK (force new version)
-        script: |
-          set -e
-          BN=$(date +%s)
           flutter clean
-          flutter build apk --release --build-number="$BN" --build-name="1.0.$BN"
+          flutter pub get
+      - name: Build release APK
+        script: |
+          BN=$(date +%s)
+          flutter build apk --release --build-number="$BN" --build-name="1.0.$BN" --no-shrink
+      - name: Collect APK artifact
+        script: |
+          echo "List outputs:"
+          ls -R build/app/outputs || true
 
+          APK_PATH=$(find build/app/outputs -type f -name "app-release.apk" -print -quit)
+          if [ -z "$APK_PATH" ]; then
+            APK_PATH=$(find build/app/outputs -type f -name "*release*.apk" -print -quit)
+          fi
+
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ APK not found"
+            exit 1
+          fi
+
+          echo "✅ Found: $APK_PATH"
+          mkdir -p build/publish
+          cp -v "$APK_PATH" build/publish/
     artifacts:
-      - build/app/outputs/flutter-apk/**/*.apk
-
-scripts:
-  - name: Pub get
-    script: flutter pub get
-  - name: Build release APK
-    script: flutter build apk --release
-    
+      - build/publish/*.apk
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: "*"
+          include: true
+          source: true
