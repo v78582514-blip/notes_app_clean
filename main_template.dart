@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:crypto/crypto.dart' as crypto;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -102,7 +104,7 @@ class NotesApp extends StatelessWidget {
   }
 }
 
-/* ===================== MODEL ===================== */
+/* ===================== MODELS ===================== */
 
 class Note {
   String id;
@@ -180,18 +182,43 @@ class Group {
   String title;
   DateTime updatedAt;
 
-  Group({required this.id, required this.title, required this.updatedAt});
+  // Приватность
+  bool isPrivate;
+  String? salt;     // случайная соль
+  String? passHash; // HMAC-SHA256(password, salt) hex
 
-  Group copyWith({String? title, DateTime? updatedAt}) => Group(
+  Group({
+    required this.id,
+    required this.title,
+    required this.updatedAt,
+    this.isPrivate = false,
+    this.salt,
+    this.passHash,
+  });
+
+  Group copyWith({
+    String? title,
+    DateTime? updatedAt,
+    bool? isPrivate,
+    String? salt,
+    String? passHash,
+  }) =>
+      Group(
         id: id,
         title: title ?? this.title,
         updatedAt: updatedAt ?? this.updatedAt,
+        isPrivate: isPrivate ?? this.isPrivate,
+        salt: salt ?? this.salt,
+        passHash: passHash ?? this.passHash,
       );
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
         'updatedAt': updatedAt.millisecondsSinceEpoch,
+        'isPrivate': isPrivate,
+        'salt': salt,
+        'passHash': passHash,
       };
 
   static Group fromJson(Map<String, dynamic> json) => Group(
@@ -199,13 +226,16 @@ class Group {
         title: (json['title'] ?? '') as String,
         updatedAt:
             DateTime.fromMillisecondsSinceEpoch(json['updatedAt'] as int),
+        isPrivate: (json['isPrivate'] as bool?) ?? false,
+        salt: json['salt'] as String?,
+        passHash: json['passHash'] as String?,
       );
 }
 
 /* ===================== STORE ===================== */
 
 class NotesStore extends ChangeNotifier {
-  static const _prefsKey = 'notes_v5_grid_groups_numbering_smart_ui';
+  static const _prefsKey = 'notes_v6_grid_groups_numbering_private';
   final List<Note> _notes = [];
   final List<Group> _groups = [];
   bool _loaded = false;
@@ -370,9 +400,10 @@ class NotesStore extends ChangeNotifier {
       return;
     }
     final g = Group(
-        id: DateTime.now().microsecondsSinceEpoch.toString(),
-        title: 'Группа',
-        updatedAt: DateTime.now());
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      title: 'Группа',
+      updatedAt: DateTime.now(),
+    );
     _groups.add(g);
     final ia = _notes.indexWhere((n) => n.id == a.id);
     final ib = _notes.indexWhere((n) => n.id == b.id);
@@ -384,37 +415,63 @@ class NotesStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  List<GridItem> getGridItems({String query = ''}) {
-    final q = query.trim().toLowerCase();
-    final singles = _notes.where((n) => n.groupId == null);
-    final gs = _groups.map((g) => GridItem.group(g)).toList();
-    final ns = singles
-        .where((n) => q.isEmpty ? true : n.text.toLowerCase().contains(q))
-        .map((n) => GridItem.note(n))
-        .toList();
-    final filteredGroups = gs.where((gi) {
-      final g = gi.group!;
-      final inTitle = q.isEmpty ? true : g.title.toLowerCase().contains(q);
-      if (inTitle || q.isEmpty) return true;
-      return notesInGroup(g.id).any((n) => n.text.toLowerCase().contains(q));
-    }).toList();
-    filteredGroups
-        .sort((a, b) => b.group!.updatedAt.compareTo(a.group!.updatedAt));
-    ns.sort((a, b) => b.note!.updatedAt.compareTo(a.note!.updatedAt));
-    return [...filteredGroups, ...ns];
+  /* ======== Приватные группы: крипто-вспомогалки и методы ======== */
+
+  String _randomSalt([int length = 20]) {
+    const chars =
+        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final rnd = Random.secure();
+    return List.generate(length, (_) => chars[rnd.nextInt(chars.length)]).join();
+  }
+
+  String _hmacSha256(String value, String salt) {
+    final key = utf8.encode(salt);
+    final bytes = utf8.encode(value);
+    final hmac = crypto.Hmac(crypto.sha256, key);
+    final digest = hmac.convert(bytes);
+    return digest.toString(); // hex
+  }
+
+  Future<void> setGroupPassword(Group g, String password) async {
+    final salt = _randomSalt(20);
+    final hash = _hmacSha256(password, salt);
+    final idx = _groups.indexWhere((x) => x.id == g.id);
+    if (idx != -1) {
+      _groups[idx] = _groups[idx].copyWith(
+        isPrivate: true,
+        salt: salt,
+        passHash: hash,
+        updatedAt: DateTime.now(),
+      );
+      await _persist();
+      notifyListeners();
+    }
+  }
+
+  Future<void> clearGroupPassword(Group g) async {
+    final idx = _groups.indexWhere((x) => x.id == g.id);
+    if (idx != -1) {
+      _groups[idx] = _groups[idx].copyWith(
+        isPrivate: false,
+        salt: null,
+        passHash: null,
+        updatedAt: DateTime.now(),
+      );
+      await _persist();
+      notifyListeners();
+    }
+  }
+
+  Future<bool> verifyGroupPassword(Group g, String password) async {
+    final salt = g.salt;
+    final hash = g.passHash;
+    if (salt == null || hash == null) return false;
+    final candidate = _hmacSha256(password, salt);
+    return candidate == hash;
   }
 }
 
-class GridItem {
-  final Note? note;
-  final Group? group;
-  GridItem.note(this.note) : group = null;
-  GridItem.group(this.group) : note = null;
-  bool get isNote => note != null;
-  bool get isGroup => group != null;
-}
-
-/* ===================== UI (GRID) ===================== */
+/* ===================== GRID / HOME ===================== */
 
 class NotesHomePage extends StatefulWidget {
   const NotesHomePage({super.key});
@@ -622,11 +679,30 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 
   Future<void> _openGroup(Group g) async {
+    // Если группа приватная — спрашиваем пароль
+    if (g.isPrivate) {
+      final pass = await _promptPassword(
+        context: context,
+        title: 'Доступ к группе',
+        hint: 'Введите пароль',
+      );
+      if (pass == null) return;
+      final ok = await store.verifyGroupPassword(g, pass);
+      if (!ok) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Неверный пароль')),
+        );
+        return;
+      }
+    }
+
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
       builder: (_) => GroupEditor(
+        store: store, // прокидываем для смены/сброса пароля
         group: g,
         notesProvider: () => store.notesInGroup(g.id),
         onRename: (title) async => store.updateGroup(g.copyWith(title: title)),
@@ -665,7 +741,7 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 }
 
-/* ===================== SETTINGS SHEET (кнопки на своей строке) ===================== */
+/* ===================== SETTINGS SHEET ===================== */
 
 class SettingsSheet extends StatefulWidget {
   const SettingsSheet({super.key});
@@ -697,9 +773,12 @@ class _SettingsSheetState extends State<SettingsSheet> {
                 const Spacer(),
                 SegmentedButton<AppThemeMode>(
                   segments: const [
-                    ButtonSegment(value: AppThemeMode.system, label: Text('Система')),
-                    ButtonSegment(value: AppThemeMode.light, label: Text('Светлая')),
-                    ButtonSegment(value: AppThemeMode.dark, label: Text('Тёмная')),
+                    ButtonSegment(
+                        value: AppThemeMode.system, label: Text('Система')),
+                    ButtonSegment(
+                        value: AppThemeMode.light, label: Text('Светлая')),
+                    ButtonSegment(
+                        value: AppThemeMode.dark, label: Text('Тёмная')),
                   ],
                   selected: <AppThemeMode>{_mode},
                   onSelectionChanged: (s) => setState(() => _mode = s.first),
@@ -840,9 +919,16 @@ class _GroupCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(group.title,
-                    style: textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold)),
+                Row(
+                  children: [
+                    Text(group.title,
+                        style: textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold)),
+                    const SizedBox(width: 8),
+                    if (group.isPrivate)
+                      const Icon(Icons.lock, size: 16),
+                  ],
+                ),
                 const SizedBox(height: 8),
                 Expanded(
                   child: notes.isEmpty
@@ -894,7 +980,7 @@ class _GroupCard extends StatelessWidget {
   }
 }
 
-/* ===================== ПЕРЕТАСКИВАНИЕ ===================== */
+/* ===================== DRAG & DROP ===================== */
 
 class DragPayload {
   final String id;
@@ -995,7 +1081,6 @@ class NoteEditor extends StatefulWidget {
 class _NoteEditorState extends State<NoteEditor> {
   late Note _model;
   late TextEditingController _text;
-  bool _detached = false;
 
   @override
   void initState() {
@@ -1021,13 +1106,10 @@ class _NoteEditorState extends State<NoteEditor> {
   void _toggleNumbering() {
     setState(() {
       _model = _model.copyWith(numbered: !_model.numbered);
-      if (_model.numbered) {
-        _ensureFirstNumber();
-      }
+      if (_model.numbered) _ensureFirstNumber();
     });
   }
 
-  // Вставка "умной" нумерации (аналог нашей прошлой логики)
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final isModifier = HardwareKeyboard.instance.isControlPressed ||
@@ -1051,8 +1133,7 @@ class _NoteEditorState extends State<NoteEditor> {
     final lineStart = _lineStartIndex(text, sel.start);
     final line = _lineAt(text, sel.start);
     if (line.trim().isEmpty) {
-      final newText =
-          text.replaceRange(lineStart, lineStart, '1. ');
+      final newText = text.replaceRange(lineStart, lineStart, '1. ');
       _text.value = _text.value.copyWith(
         text: newText,
         selection: TextSelection.collapsed(offset: sel.start + 3),
@@ -1129,9 +1210,7 @@ class _NoteEditorState extends State<NoteEditor> {
                       ButtonSegment(value: true, label: Text('Нумер.')),
                     ],
                     selected: <bool>{_model.numbered},
-                    onSelectionChanged: (s) {
-                      _toggleNumbering();
-                    },
+                    onSelectionChanged: (s) => _toggleNumbering(),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -1188,8 +1267,8 @@ class _NoteEditorState extends State<NoteEditor> {
                     child: _ColorDot(
                       color: c,
                       selected: _model.colorHex == c.value,
-                      onTap: () => setState(
-                          () => _model = _model.copyWith(colorHex: c.value)),
+                      onTap: () =>
+                          setState(() => _model = _model.copyWith(colorHex: c.value)),
                     ),
                   ),
               ],
@@ -1211,13 +1290,10 @@ class _NoteEditorState extends State<NoteEditor> {
                     child: OutlinedButton.icon(
                       icon: const Icon(Icons.link_off),
                       label: const Text('Исключить из группы'),
-                      onPressed: () {
-                        _detached = true;
-                        Navigator.pop(
-                            context,
-                            NoteActionResult(
-                                note: _model, detachedFromGroup: true));
-                      },
+                      onPressed: () => Navigator.pop(
+                        context,
+                        NoteActionResult(note: _model, detachedFromGroup: true),
+                      ),
                     ),
                   ),
                 if (_model.groupId != null) const SizedBox(width: 12),
@@ -1227,7 +1303,9 @@ class _NoteEditorState extends State<NoteEditor> {
                       icon: const Icon(Icons.delete_outline),
                       label: const Text('Удалить'),
                       onPressed: () => Navigator.pop(
-                          context, NoteActionResult(note: _model, delete: true)),
+                        context,
+                        NoteActionResult(note: _model, delete: true),
+                      ),
                     ),
                   ),
                 if (widget.note != null) const SizedBox(width: 12),
@@ -1235,8 +1313,8 @@ class _NoteEditorState extends State<NoteEditor> {
                   child: FilledButton.icon(
                     icon: const Icon(Icons.check),
                     label: const Text('Сохранить'),
-                    onPressed: () => Navigator.pop(
-                        context, NoteActionResult(note: _model)),
+                    onPressed: () =>
+                        Navigator.pop(context, NoteActionResult(note: _model)),
                   ),
                 ),
               ],
@@ -1248,9 +1326,10 @@ class _NoteEditorState extends State<NoteEditor> {
   }
 }
 
-/* ===================== ГРУППА: Лист и действия ===================== */
+/* ===================== ГРУППА: Лист и действия + приватность ===================== */
 
 class GroupEditor extends StatefulWidget {
+  final NotesStore store;
   final Group group;
   final List<Note> Function() notesProvider;
   final Future<void> Function(String title) onRename;
@@ -1260,6 +1339,7 @@ class GroupEditor extends StatefulWidget {
 
   const GroupEditor({
     super.key,
+    required this.store,
     required this.group,
     required this.notesProvider,
     required this.onRename,
@@ -1326,6 +1406,107 @@ class _GroupEditorState extends State<GroupEditor> {
               ],
             ),
             const SizedBox(height: 12),
+
+            // === Приватность группы ===
+            Card(
+              elevation: 0,
+              color:
+                  Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.lock_outline),
+                        const SizedBox(width: 8),
+                        Text('Приватность',
+                            style: Theme.of(context).textTheme.titleMedium),
+                        const Spacer(),
+                        Switch(
+                          value: widget.group.isPrivate,
+                          onChanged: (v) async {
+                            if (v) {
+                              final pass = await _promptPassword(
+                                context: context,
+                                title: 'Задать пароль',
+                                hint: 'Пароль для группы',
+                              );
+                              if (pass == null || pass.length < 4) {
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          'Пароль не задан (мин. 4 символа).')),
+                                );
+                                return;
+                              }
+                              await widget.store.setGroupPassword(
+                                  widget.group, pass);
+                              setState(() {});
+                            } else {
+                              await widget.store.clearGroupPassword(
+                                  widget.group);
+                              setState(() {});
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    if (widget.group.isPrivate)
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.password),
+                              label: const Text('Сменить пароль'),
+                              onPressed: () async {
+                                final pass = await _promptPassword(
+                                  context: context,
+                                  title: 'Новый пароль',
+                                  hint: 'Введите новый пароль',
+                                );
+                                if (pass == null || pass.length < 4) return;
+                                await widget.store
+                                    .setGroupPassword(widget.group, pass);
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content: Text('Пароль обновлён')),
+                                  );
+                                }
+                                setState(() {});
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.lock_open),
+                              label: const Text('Сделать публичной'),
+                              onPressed: () async {
+                                await widget.store
+                                    .clearGroupPassword(widget.group);
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content:
+                                            Text('Группа теперь публичная')),
+                                  );
+                                }
+                                setState(() {});
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
             if (notes.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(16),
@@ -1345,9 +1526,8 @@ class _GroupEditorState extends State<GroupEditor> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      subtitle: n.numbered
-                          ? const Text('Нумерация включена')
-                          : null,
+                      subtitle:
+                          n.numbered ? const Text('Нумерация включена') : null,
                       onTap: () => widget.onEditNote(n),
                       trailing: PopupMenuButton<String>(
                         onSelected: (v) async {
@@ -1394,7 +1574,7 @@ class _GroupEditorState extends State<GroupEditor> {
   }
 }
 
-/* ===================== МЕЛОЧИ/ПОМOЩНИКИ ===================== */
+/* ===================== ДИАЛОГИ / УТИЛИТЫ ===================== */
 
 class _ErrorPane extends StatelessWidget {
   final String err;
@@ -1474,8 +1654,47 @@ class _ColorDot extends StatelessWidget {
   }
 }
 
+Future<String?> _promptPassword({
+  required BuildContext context,
+  String title = 'Пароль',
+  String hint = 'Введите пароль',
+}) {
+  final c = TextEditingController();
+  return showDialog<String>(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: Text(title),
+      content: TextField(
+        controller: c,
+        obscureText: true,
+        decoration: InputDecoration(hintText: hint),
+        autofocus: true,
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context, null),
+            child: const Text('Отмена')),
+        FilledButton(
+            onPressed: () => Navigator.pop(context, c.text),
+            child: const Text('ОК')),
+      ],
+    ),
+  );
+}
+
 String _fmtDate(DateTime dt) {
   final d = dt;
-  final two = (int n) => n < 10 ? '0$n' : '$n';
+  String two(int n) => n < 10 ? '0$n' : '$n';
   return '${two(d.day)}.${two(d.month)}.${d.year} ${two(d.hour)}:${two(d.minute)}';
+}
+
+/* ===================== GRID ITEM WRAPPER ===================== */
+
+class GridItem {
+  final Note? note;
+  final Group? group;
+  GridItem.note(this.note) : group = null;
+  GridItem.group(this.group) : note = null;
+  bool get isNote => note != null;
+  bool get isGroup => group != null;
 }
