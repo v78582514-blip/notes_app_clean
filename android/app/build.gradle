@@ -5,15 +5,24 @@ plugins {
 }
 
 android {
-    namespace "com.example.notice_app"          // можно поменять
-    compileSdk 35
+    namespace "com.example.notice_app"          // ← Можешь оставить или поменять
+    compileSdk 36
 
     defaultConfig {
-        applicationId "com.example.notice_app"  // ← это твой пакет (нужно будет в MainActivity)
+        applicationId "com.example.notice_app"  // ← Совпадает с namespace и пакетом в MainActivity
         minSdk 21
-        targetSdk 35
+        targetSdk 36
         versionCode 1
         versionName "1.0"
+    }
+
+    // ВЫРАВНИВАЕМ JVM: и Java, и Kotlin = 17
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
     }
 
     buildTypes {
@@ -27,4 +36,8 @@ android {
 
 flutter {
     source '../..'
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.24"
 }
