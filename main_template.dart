@@ -567,7 +567,7 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 }
 
-/* ===================== SETTINGS SHEET (кнопки сверху) ===================== */
+/* ===================== SETTINGS SHEET (кнопки на своей строке) ===================== */
 
 class SettingsSheet extends StatefulWidget {
   const SettingsSheet({super.key});
@@ -589,22 +589,38 @@ class _SettingsSheetState extends State<SettingsSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Кнопки сохраняем сверху — не перекрываются системой
-            Row(
-              children: [
-                Text('Панель управления', style: Theme.of(context).textTheme.titleLarge),
-                const Spacer(),
-                OutlinedButton.icon(
-                  onPressed: () => Navigator.maybePop(context),
-                  icon: const Icon(Icons.close), label: const Text('Отмена'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton.icon(
-                  onPressed: () async { await settings.setTheme(_mode); if (context.mounted) Navigator.pop(context); },
-                  icon: const Icon(Icons.save), label: const Text('Сохранить'),
-                ),
-              ],
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Панель управления', style: Theme.of(context).textTheme.titleLarge),
             ),
+            const SizedBox(height: 8),
+
+            LayoutBuilder(
+              builder: (context, c) {
+                final narrow = c.maxWidth < 360;
+                final children = [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.maybePop(context),
+                      icon: const Icon(Icons.close),
+                      label: const Text('Отмена'),
+                    ),
+                  ),
+                  SizedBox(width: narrow ? 0 : 12, height: narrow ? 8 : 0),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () async { await settings.setTheme(_mode); if (context.mounted) Navigator.pop(context); },
+                      icon: const Icon(Icons.save),
+                      label: const Text('Сохранить'),
+                    ),
+                  ),
+                ];
+                return narrow
+                    ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children)
+                    : Row(children: children);
+              },
+            ),
+
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerLeft,
@@ -906,115 +922,143 @@ class _NoteEditorState extends State<NoteEditor> {
     super.dispose();
   }
 
-  /* ==== НУМЕРАЦИЯ: умная вставка, двойной Enter завершает список ==== */
-  void _handleTextChanged() {
-    if (_internalEdit) { _lastValue = _ctrl.value; return; }
-    final now = _ctrl.value;
-    final old = _lastValue;
-
-    // Только если включена нумерация
-    if (_numbered) {
-      // Случай 1: вставлен ровно один символ и это \n
-      final insertedNewline = now.text.length == old.text.length + 1 &&
-          now.selection.baseOffset == old.selection.baseOffset + 1 &&
-          now.text.substring(0, now.selection.baseOffset).endsWith('\n');
-
-      if (insertedNewline) {
-        final caret = now.selection.baseOffset;
-        // Текст до каретки (включая только что вставленный \n)
-        final before = now.text.substring(0, caret);
-        final lines = before.split('\n');
-
-        // Предыдущая строка (до вставленного \n)
-        final prevLine = lines.length >= 2 ? lines[lines.length - 2] : '';
-
-        // Если предыдущая строка — только номер без текста: "<N>. " => двойной Enter -> завершить список
-        final isEmptyNumbered = RegExp(r'^\d+\. $').hasMatch(prevLine);
-        if (isEmptyNumbered) {
-          // Удаляем "<N>. " из предыдущей строки и выходим без вставки нового номера
-          final startOfPrevLine = before.lastIndexOf('\n', before.length - prevLine.length - 2);
-          final absStart = startOfPrevLine == -1 ? 0 : startOfPrevLine + 1;
-          final absEnd = absStart + prevLine.length; // позиция конца предыдущей строки
-          final newText = now.text.replaceRange(absStart, absEnd, '');
-          final delta = prevLine.length; // сколько удалили
-          _internalEdit = true;
-          _ctrl.value = TextEditingValue(
-            text: newText,
-            selection: TextSelection.collapsed(offset: caret - delta),
-          );
-          _internalEdit = false;
-          _lastValue = _ctrl.value;
-          return;
-        }
-
-        // Иначе — нормальный случай: вставить следующий номер после пустой строки счет обнуляется
-        final lastEmptyBreak = before.substring(0, before.length - 1).lastIndexOf('\n\n'); // двойной \n — граница блоков
-        final blockStart = lastEmptyBreak >= 0 ? lastEmptyBreak + 2 : 0;
-        final blockText = before.substring(blockStart, before.length - 1); // без завершающего \n
-        final blockLines = blockText.isEmpty ? <String>[] : blockText.split('\n');
-
-        // Считаем непустые строки в блоке (игнорируя префикс N. )
-        int nonEmpty = 0;
-        for (final l in blockLines) {
-          final stripped = l.replaceFirst(RegExp(r'^\d+\. '), '');
-          if (stripped.trim().isNotEmpty) nonEmpty++;
-        }
-        final nextNumber = nonEmpty + 1;
-        final insert = '$nextNumber. ';
-        _internalEdit = true;
-        _ctrl.value = TextEditingValue(
-          text: now.text.replaceRange(caret, caret, insert),
-          selection: TextSelection.collapsed(offset: caret + insert.length),
-        );
-        _internalEdit = false;
-        _lastValue = _ctrl.value;
-        return;
-      }
-    }
-
-    _lastValue = now;
-  }
-
-  // При изменении тумблера — если включаем и курсор на пустой/новой строке, вставим "1. "
-  void _maybeInsertFirstNumber() {
+  /* === ХЕЛПЕР: вставка префикса "<N>. " в начало текущей строки === */
+  void _insertNumberPrefixAtLineStart({
+    required int lineStart,
+    required int caret,
+    int? explicitNumber,
+  }) {
     final v = _ctrl.value;
-    final caret = v.selection.baseOffset;
-    if (caret < 0) return;
-    // Найти начало текущей строки
-    final lineStart = v.text.lastIndexOf('\n', caret - 1) + 1;
-    final lineEnd = v.text.indexOf('\n', caret);
-    final end = lineEnd == -1 ? v.text.length : lineEnd;
-    final line = v.text.substring(lineStart, end);
-    final leftOfCaret = v.text.substring(lineStart, caret);
-
-    final hasNumberPrefix = RegExp(r'^\d+\. ').hasMatch(line);
-    final isAtStart = leftOfCaret.trim().isEmpty;
-
-    if (!hasNumberPrefix && isAtStart) {
-      // Определим стартовый номер: если это новый блок (перед ним пустая строка) => 1
-      // Иначе посчитаем предыдущие непустые строки в блоке
+    int number;
+    if (explicitNumber != null) {
+      number = explicitNumber;
+    } else {
       final before = v.text.substring(0, lineStart);
-      final lastEmptyBreak = before.lastIndexOf('\n\n');
+      final lastEmptyBreak = before.lastIndexOf('\n\n'); // пустая строка = граница блока
       final blockStart = lastEmptyBreak >= 0 ? lastEmptyBreak + 2 : 0;
       final blockText = before.substring(blockStart);
       final blockLines = blockText.isEmpty ? <String>[] : blockText.split('\n');
-
       int nonEmpty = 0;
       for (final l in blockLines) {
         final stripped = l.replaceFirst(RegExp(r'^\d+\. '), '');
         if (stripped.trim().isNotEmpty) nonEmpty++;
       }
-      final number = nonEmpty == 0 ? 1 : nonEmpty + 1;
-
-      final insert = '$number. ';
-      _internalEdit = true;
-      _ctrl.value = TextEditingValue(
-        text: v.text.replaceRange(lineStart, lineStart, insert),
-        selection: TextSelection.collapsed(offset: caret + insert.length),
-      );
-      _internalEdit = false;
-      _lastValue = _ctrl.value;
+      number = (nonEmpty == 0) ? 1 : nonEmpty + 1;
     }
+
+    final insert = '$number. ';
+    _internalEdit = true;
+    _ctrl.value = TextEditingValue(
+      text: v.text.replaceRange(lineStart, lineStart, insert),
+      selection: TextSelection.collapsed(offset: caret + insert.length),
+    );
+    _internalEdit = false;
+    _lastValue = _ctrl.value;
+  }
+
+  // При включении тумблера — если пустая строка, ставим "1. "
+  void _maybeInsertFirstNumber() {
+    final v = _ctrl.value;
+    final caret = v.selection.baseOffset;
+    if (caret < 0) return;
+    final lineStart = v.text.lastIndexOf('\n', caret - 1) + 1;
+    final lineEnd = v.text.indexOf('\n', caret);
+    final end = lineEnd == -1 ? v.text.length : lineEnd;
+    final line = v.text.substring(lineStart, end);
+    final hasPrefix = RegExp(r'^\d+\. ').hasMatch(line);
+
+    final leftOfCaret = v.text.substring(lineStart, caret);
+    final atLineStartOrOnlySpaces = leftOfCaret.trim().isEmpty && line.trim().isEmpty;
+
+    if (!hasPrefix && atLineStartOrOnlySpaces) {
+      _insertNumberPrefixAtLineStart(lineStart: lineStart, caret: caret);
+    }
+  }
+
+  /* ==== НУМЕРАЦИЯ: умная вставка; для Enter И ДЛЯ ПЕРВОГО СИМВОЛА ==== */
+  void _handleTextChanged() {
+    if (_internalEdit) { _lastValue = _ctrl.value; return; }
+    final now = _ctrl.value;
+    final old = _lastValue;
+
+    if (_numbered) {
+      final caret = now.selection.baseOffset;
+      if (caret >= 0) {
+        final lineStart = now.text.lastIndexOf('\n', caret - 1) + 1;
+        final lineEnd = now.text.indexOf('\n', caret);
+        final end = lineEnd == -1 ? now.text.length : lineEnd;
+        final line = now.text.substring(lineStart, end);
+        final hasPrefix = RegExp(r'^\d+\. ').hasMatch(line);
+
+        // A) Вставлен 1 символ, не '\n' (первый символ строки) → подставим префикс перед ним
+        final insertedOneChar = now.text.length == old.text.length + 1 &&
+            now.selection.baseOffset == old.selection.baseOffset + 1;
+
+        if (insertedOneChar) {
+          final insertedChar = now.text[caret - 1];
+          if (insertedChar != '\n' && !hasPrefix) {
+            final pre = now.text.substring(lineStart, caret);
+            if (pre.trim().length == 1) { // только что появился первый «осмысленный» символ
+              _insertNumberPrefixAtLineStart(lineStart: lineStart, caret: caret);
+              return;
+            }
+          }
+        }
+
+        // B) Вставлен '\n' (Enter)
+        final insertedNewline = now.text.length == old.text.length + 1 &&
+            now.selection.baseOffset == old.selection.baseOffset + 1 &&
+            now.text.substring(0, now.selection.baseOffset).endsWith('\n');
+
+        if (insertedNewline) {
+          final before = now.text.substring(0, caret); // включая \n
+          final lines = before.split('\n');
+          final prevLine = lines.length >= 2 ? lines[lines.length - 2] : '';
+
+          // двойной Enter на пустом пункте "N. "
+          final isEmptyNumbered = RegExp(r'^\d+\. $').hasMatch(prevLine);
+          if (isEmptyNumbered) {
+            final startOfPrevLine = before.lastIndexOf('\n', before.length - prevLine.length - 2);
+            final absStart = startOfPrevLine == -1 ? 0 : startOfPrevLine + 1;
+            final absEnd = absStart + prevLine.length;
+            final newText = now.text.replaceRange(absStart, absEnd, '');
+            final delta = prevLine.length;
+            _internalEdit = true;
+            _ctrl.value = TextEditingValue(
+              text: newText,
+              selection: TextSelection.collapsed(offset: caret - delta),
+            );
+            _internalEdit = false;
+            _lastValue = _ctrl.value;
+            return;
+          }
+
+          // обычный Enter → следующий номер; блок — между пустыми строками
+          final lastEmptyBreak = before.substring(0, before.length - 1).lastIndexOf('\n\n');
+          final blockStart = lastEmptyBreak >= 0 ? lastEmptyBreak + 2 : 0;
+          final blockText = before.substring(blockStart, before.length - 1);
+          final blockLines = blockText.isEmpty ? <String>[] : blockText.split('\n');
+
+          int nonEmpty = 0;
+          for (final l in blockLines) {
+            final stripped = l.replaceFirst(RegExp(r'^\d+\. '), '');
+            if (stripped.trim().isNotEmpty) nonEmpty++;
+          }
+          final nextNumber = nonEmpty + 1;
+          final insert = '$nextNumber. ';
+          _internalEdit = true;
+          _ctrl.value = TextEditingValue(
+            text: now.text.replaceRange(caret, caret, insert),
+            selection: TextSelection.collapsed(offset: caret + insert.length),
+          );
+          _internalEdit = false;
+          _lastValue = _ctrl.value;
+          return;
+        }
+      }
+    }
+
+    _lastValue = now;
   }
 
   @override
@@ -1029,39 +1073,79 @@ class _NoteEditorState extends State<NoteEditor> {
           left: 16, right: 16, top: 8,
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Row(children: [
-            Text(isNew ? 'Новая заметка' : 'Редактирование', style: Theme.of(context).textTheme.titleLarge),
-            const Spacer(),
-            OutlinedButton.icon(
-              onPressed: () => Navigator.maybePop(context),
-              icon: const Icon(Icons.close),
-              label: const Text('Отмена'),
-            ),
-            const SizedBox(width: 8),
-            FilledButton.icon(
-              onPressed: () {
-                final text = _ctrl.text.trimRight();
-                var note = (widget.note ?? Note.newNote()).copyWith(
-                  text: text,
-                  numbered: _numbered,
-                  updatedAt: DateTime.now(),
-                  colorHex: _selectedColor?.value,
-                  keepNullColor: _selectedColor == null,
-                );
-                final detached = _detachFromGroup && widget.note?.groupId != null;
-                if (detached) {
-                  note = note.copyWith(groupId: null, setGroupId: true);
-                }
-                Navigator.of(context).pop(NoteActionResult(note: note, detachedFromGroup: detached));
-              },
-              icon: const Icon(Icons.save),
-              label: const Text('Сохранить'),
-            ),
-          ]),
+          // Заголовок
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(isNew ? 'Новая заметка' : 'Редактирование',
+                style: Theme.of(context).textTheme.titleLarge),
+          ),
+          const SizedBox(height: 8),
 
-          const SizedBox(height: 6),
+          // Кнопки (адаптивно)
+          LayoutBuilder(
+            builder: (context, c) {
+              final narrow = c.maxWidth < 360;
+              final btns = [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.maybePop(context),
+                    icon: const Icon(Icons.close),
+                    label: const Text('Отмена'),
+                  ),
+                ),
+                SizedBox(width: narrow ? 0 : 12, height: narrow ? 8 : 0),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      final text = _ctrl.text.trimRight();
+                      var note = (widget.note ?? Note.newNote()).copyWith(
+                        text: text,
+                        numbered: _numbered,
+                        updatedAt: DateTime.now(),
+                        colorHex: _selectedColor?.value,
+                        keepNullColor: _selectedColor == null,
+                      );
+                      final detached = _detachFromGroup && widget.note?.groupId != null;
+                      if (detached) {
+                        note = note.copyWith(groupId: null, setGroupId: true);
+                      }
+                      Navigator.of(context).pop(NoteActionResult(
+                        note: note, detachedFromGroup: detached));
+                    },
+                    icon: const Icon(Icons.save),
+                    label: const Text('Сохранить'),
+                  ),
+                ),
+              ];
+              return narrow
+                  ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: btns)
+                  : Row(children: btns);
+            },
+          ),
+
+          const SizedBox(height: 8),
+
+          // Быстрые действия
           Row(
             children: [
+              IconButton(
+                tooltip: 'Вставить текущую дату',
+                onPressed: () {
+                  final now = DateTime.now();
+                  final s = '${_pad(now.day)}.${_pad(now.month)}.${now.year} ${_pad(now.hour)}:${_pad(now.minute)}';
+                  final sel = _ctrl.selection;
+                  final t = _ctrl.text;
+                  final start = sel.start >= 0 ? sel.start : t.length;
+                  final end = sel.end >= 0 ? sel.end : t.length;
+                  _internalEdit = true;
+                  _ctrl.text = t.replaceRange(start, end, s);
+                  _ctrl.selection = TextSelection.collapsed(offset: start + s.length);
+                  _internalEdit = false;
+                  _lastValue = _ctrl.value;
+                },
+                icon: const Icon(Icons.calendar_month),
+              ),
+              const SizedBox(width: 8),
               Expanded(
                 child: SwitchListTile(
                   dense: true,
@@ -1069,7 +1153,7 @@ class _NoteEditorState extends State<NoteEditor> {
                   value: _numbered,
                   onChanged: (v) {
                     setState(() => _numbered = v);
-                    if (v) _maybeInsertFirstNumber(); // при включении — сразу "1. "
+                    if (v) _maybeInsertFirstNumber(); // сразу "1. " при включении
                   },
                   title: const Text('Нумерация строк'),
                 ),
@@ -1078,34 +1162,14 @@ class _NoteEditorState extends State<NoteEditor> {
                 TextButton.icon(
                   onPressed: () => setState(() => _detachFromGroup = !_detachFromGroup),
                   icon: Icon(_detachFromGroup ? Icons.check_box : Icons.check_box_outline_blank),
-                  label: const Text('Отделить от группы'),
+                  label: const Text('Отделить'),
                 ),
             ],
           ),
 
-          const SizedBox(height: 6),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Wrap(
-              spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                _ColorDot(
-                  color: null,
-                  selected: _selectedColor == null,
-                  onTap: () => setState(() => _selectedColor = null),
-                  label: 'Без цвета',
-                ),
-                for (final c in _palette())
-                  _ColorDot(
-                    color: c,
-                    selected: _selectedColor?.value == c.value,
-                    onTap: () => setState(() => _selectedColor = c),
-                  ),
-              ],
-            ),
-          ),
-
           const SizedBox(height: 10),
+
+          // Поле ввода
           TextField(
             controller: _ctrl,
             autofocus: true,
@@ -1199,22 +1263,39 @@ class _GroupEditorState extends State<GroupEditor> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              children: [
-                Text('Группа', style: Theme.of(context).textTheme.titleLarge),
-                const Spacer(),
-                OutlinedButton.icon(
-                  onPressed: () => Navigator.maybePop(context),
-                  icon: const Icon(Icons.close), label: const Text('Отмена'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton.icon(
-                  onPressed: () async { await widget.onRename(_title.text.trim()); if (context.mounted) Navigator.pop(context); },
-                  icon: const Icon(Icons.save), label: const Text('Сохранить'),
-                ),
-              ],
+            // Заголовок
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Группа', style: Theme.of(context).textTheme.titleLarge),
             ),
             const SizedBox(height: 8),
+
+            // Кнопки
+            LayoutBuilder(
+              builder: (context, c) {
+                final narrow = c.maxWidth < 360;
+                final children = [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.maybePop(context),
+                      icon: const Icon(Icons.close), label: const Text('Отмена'),
+                    ),
+                  ),
+                  SizedBox(width: narrow ? 0 : 12, height: narrow ? 8 : 0),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () async { await widget.onRename(_title.text.trim()); if (context.mounted) Navigator.pop(context); },
+                      icon: const Icon(Icons.save), label: const Text('Сохранить'),
+                    ),
+                  ),
+                ];
+                return narrow
+                    ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children)
+                    : Row(children: children);
+              },
+            ),
+
+            const SizedBox(height: 12),
             TextField(
               controller: _title,
               decoration: const InputDecoration(labelText: 'Заголовок группы', hintText: 'Например: Проект А'),
