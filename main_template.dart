@@ -29,12 +29,575 @@ class SettingsStore extends ChangeNotifier {
     if (raw != null && raw.isNotEmpty) {
       final m = Map<String, dynamic>.from(jsonDecode(raw) as Map);
       switch (m['theme'] as String? ?? 'system') {
-        case 'light':
-          themeMode = AppThemeMode.light;
-          break;
-        case 'dark':
-          themeMode = AppThemeMode.dark;
-          break;
+        case 'light': themeMode = AppThemeMode.light; break;
+        case 'dark': themeMode = AppThemeMode.dark; break;
+        default: themeMode = AppThemeMode.system;
+      }
+    }
+  }
+
+  Future<void> _save() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_k, jsonEncode({
+      'theme': switch (themeMode) {
+        AppThemeMode.light => 'light',
+        AppThemeMode.dark => 'dark',
+        _ => 'system',
+      }
+    }));
+  }
+
+  Future<void> setTheme(AppThemeMode m) async { themeMode = m; await _save(); notifyListeners(); }
+
+  ThemeMode get flutterThemeMode => switch (themeMode) {
+    AppThemeMode.light => ThemeMode.light,
+    AppThemeMode.dark => ThemeMode.dark,
+    _ => ThemeMode.system,
+  };
+}
+
+/* ===================== APP ===================== */
+
+class NotesApp extends StatelessWidget {
+  const NotesApp({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: settings,
+      builder: (_, __) {
+        final scheme = ColorScheme.fromSeed(seedColor: Colors.indigo);
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'Заметки',
+          themeMode: settings.flutterThemeMode,
+          theme: ThemeData(
+            useMaterial3: true,
+            colorScheme: scheme,
+            inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
+          ),
+          darkTheme: ThemeData.dark(useMaterial3: true).copyWith(
+            colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo, brightness: Brightness.dark),
+          ),
+          home: const NotesScreen(),
+        );
+      },
+    );
+  }
+}
+
+/* ===================== MODELS ===================== */
+
+class Note {
+  String id;
+  String title;
+  String text;
+  DateTime createdAt;
+  DateTime updatedAt;
+  int? colorHex;
+  String? groupId;
+  bool numbered;
+
+  Note({
+    required this.id,
+    required this.title,
+    required this.text,
+    required this.createdAt,
+    required this.updatedAt,
+    this.colorHex,
+    this.groupId,
+    this.numbered = false,
+  });
+
+  factory Note.newNote() {
+    final now = DateTime.now();
+    return Note(
+      id: now.microsecondsSinceEpoch.toString(),
+      title: '',
+      text: '',
+      createdAt: now,
+      updatedAt: now,
+    );
+  }
+
+  Note copyWith({
+    String? title,
+    String? text,
+    DateTime? updatedAt,
+    int? colorHex,
+    bool keepNullColor = false,
+    String? groupId,
+    bool setGroupId = false,
+    bool? numbered,
+  }) => Note(
+    id: id,
+    title: title ?? this.title,
+    text: text ?? this.text,
+    createdAt: createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    colorHex: keepNullColor ? null : (colorHex ?? this.colorHex),
+    groupId: setGroupId ? groupId : this.groupId,
+    numbered: numbered ?? this.numbered,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'text': text,
+    'createdAt': createdAt.millisecondsSinceEpoch,
+    'updatedAt': updatedAt.millisecondsSinceEpoch,
+    'colorHex': colorHex,
+    'groupId': groupId,
+    'numbered': numbered,
+  };
+
+  static Note fromJson(Map<String, dynamic> json) => Note(
+    id: json['id'] as String,
+    title: (json['title'] ?? '') as String,
+    text: (json['text'] ?? '') as String,
+    createdAt: DateTime.fromMillisecondsSinceEpoch(json['createdAt'] as int),
+    updatedAt: DateTime.fromMillisecondsSinceEpoch(json['updatedAt'] as int),
+    colorHex: json['colorHex'] as int?,
+    groupId: json['groupId'] as String?,
+    numbered: (json['numbered'] as bool?) ?? false,
+  );
+}
+
+class Group {
+  String id;
+  String title;
+  DateTime updatedAt;
+
+  bool isPrivate;
+  String? salt;
+  String? passHash;
+
+  Group({
+    required this.id,
+    required this.title,
+    required this.updatedAt,
+    this.isPrivate = false,
+    this.salt,
+    this.passHash,
+  });
+
+  Group copyWith({
+    String? title,
+    DateTime? updatedAt,
+    bool? isPrivate,
+    String? salt,
+    String? passHash,
+  }) => Group(
+    id: id,
+    title: title ?? this.title,
+    updatedAt: updatedAt ?? this.updatedAt,
+    isPrivate: isPrivate ?? this.isPrivate,
+    salt: salt ?? this.salt,
+    passHash: passHash ?? this.passHash,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'updatedAt': updatedAt.millisecondsSinceEpoch,
+    'isPrivate': isPrivate,
+    'salt': salt,
+    'passHash': passHash,
+  };
+
+  static Group fromJson(Map<String, dynamic> json) => Group(
+    id: json['id'] as String,
+    title: (json['title'] ?? '') as String,
+    updatedAt: DateTime.fromMillisecondsSinceEpoch(json['updatedAt'] as int),
+    isPrivate: (json['isPrivate'] as bool?) ?? false,
+    salt: json['salt'] as String?,
+    passHash: json['passHash'] as String?,
+  );
+}
+
+/* ===================== STORE ===================== */
+
+class NotesStore extends ChangeNotifier {
+  static const _prefsKey = 'notes_v12_privacy_numbering_native_share';
+  final List<Note> _notes = [];
+  final List<Group> _groups = [];
+  bool _loaded = false;
+  String? _error;
+
+  List<Note> get notes => List.unmodifiable(_notes);
+  List<Group> get groups => List.unmodifiable(_groups);
+  bool get isLoaded => _loaded;
+  String? get lastError => _error;
+
+  Group? groupById(String id) => _groups.cast<Group?>().firstWhere(
+        (g) => g?.id == id, orElse: () => null);
+
+  Future<void> load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefsKey);
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          final ns = (decoded['notes'] as List? ?? [])
+              .map((e) => Note.fromJson(Map<String, dynamic>.from(e)))
+              .toList();
+          final gs = (decoded['groups'] as List? ?? [])
+              .map((e) => Group.fromJson(Map<String, dynamic>.from(e)))
+              .toList();
+          _notes..clear()..addAll(ns);
+          _groups..clear()..addAll(gs);
+        }
+      }
+      if (_notes.isEmpty) {
+        _notes.addAll([
+          Note(
+            id: DateTime.now().microsecondsSinceEpoch.toString(),
+            title: 'Советы',
+            text: '👋 Перетащите заметку на другую — получится группа.\nДолгое нажатие — перетаскивание.',
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+            colorHex: const Color(0xFF64B5F6).value,
+          ),
+          Note(
+            id: (DateTime.now().microsecondsSinceEpoch + 1).toString(),
+            title: 'Удаление',
+            text: 'Перетащите заметку в верхний левый красный блок «Удалить».',
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+            colorHex: const Color(0xFFFFD54F).value,
+          ),
+        ]);
+        await _persist();
+      }
+    } catch (e) {
+      _error = 'Ошибка загрузки: $e';
+    } finally {
+      _loaded = true;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _persist() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = jsonEncode({
+        'notes': _notes.map((e) => e.toJson()).toList(),
+        'groups': _groups.map((e) => e.toJson()).toList(),
+      });
+      await prefs.setString(_prefsKey, raw);
+    } catch (e) {
+      _error = 'Ошибка сохранения: $e';
+      notifyListeners();
+    }
+  }
+
+  Future<void> addNote(Note note) async { _notes.add(note); await _persist(); notifyListeners(); }
+  Future<void> updateNote(Note note) async {
+    final i = _notes.indexWhere((n) => n.id == note.id);
+    if (i != -1) {
+      _notes[i] = note.copyWith(updatedAt: DateTime.now());
+      await _persist(); notifyListeners();
+    }
+  }
+  Future<void> deleteNote(String id) async { _notes.removeWhere((n) => n.id == id); await _persist(); notifyListeners(); }
+
+  Future<void> addGroup(Group g) async { _groups.add(g); await _persist(); notifyListeners(); }
+  Future<void> updateGroup(Group g) async {
+    final i = _groups.indexWhere((x) => x.id == g.id);
+    if (i != -1) { _groups[i] = g.copyWith(updatedAt: DateTime.now()); await _persist(); notifyListeners(); }
+  }
+  Future<void> deleteGroup(String groupId) async {
+    _notes.removeWhere((n) => n.groupId == groupId);
+    _groups.removeWhere((g) => g.id == groupId);
+    await _persist(); notifyListeners();
+  }
+
+  List<Note> notesInGroup(String groupId) => _notes.where((n) => n.groupId == groupId).toList();
+
+  Future<void> addNoteToGroup(String noteId, String groupId) async {
+    final idx = _notes.indexWhere((n) => n.id == noteId);
+    if (idx != -1) {
+      _notes[idx] = _notes[idx].copyWith(groupId: groupId, setGroupId: true, updatedAt: DateTime.now());
+      await _persist(); notifyListeners();
+    }
+  }
+  Future<void> removeNoteFromGroup(String noteId) async {
+    final idx = _notes.indexWhere((n) => n.id == noteId);
+    if (idx != -1) {
+      _notes[idx] = _notes[idx].copyWith(groupId: null, setGroupId: true, updatedAt: DateTime.now());
+      await _persist(); notifyListeners();
+    }
+  }
+
+  Future<void> createGroupWith(String noteAId, String noteBId) async {
+    final a = _notes.firstWhere((n) => n.id == noteAId);
+    final b = _notes.firstWhere((n) => n.id == noteBId);
+    if (a.groupId != null && b.groupId == null) { await addNoteToGroup(b.id, a.groupId!); return; }
+    if (b.groupId != null && a.groupId == null) { await addNoteToGroup(a.id, b.groupId!); return; }
+    if (a.groupId != null && b.groupId != null) {
+      if (a.groupId != b.groupId) {
+        final target = a.groupId!, source = b.groupId!;
+        for (final n in _notes.where((n) => n.groupId == source)) { await addNoteToGroup(n.id, target); }
+        _groups.removeWhere((g) => g.id == source);
+        await _persist(); notifyListeners();
+      }
+      return;
+    }
+    final g = Group(id: DateTime.now().microsecondsSinceEpoch.toString(), title: 'Группа', updatedAt: DateTime.now());
+    _groups.add(g);
+    final ia = _notes.indexWhere((n) => n.id == a.id);
+    final ib = _notes.indexWhere((n) => n.id == b.id);
+    _notes[ia] = a.copyWith(groupId: g.id, setGroupId: true, updatedAt: DateTime.now());
+    _notes[ib] = b.copyWith(groupId: g.id, setGroupId: true, updatedAt: DateTime.now());
+    await _persist(); notifyListeners();
+  }
+
+  /* ======== Private groups (simple hash) ======== */
+
+  String _randomSalt([int length = 20]) {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final rnd = Random.secure();
+    return List.generate(length, (_) => chars[rnd.nextInt(chars.length)]).join();
+  }
+
+  String _fastHash(String password, String salt) {
+    final bytes = utf8.encode('$salt::$password');
+    int acc = 0;
+    for (var i = 0; i < bytes.length; i++) {
+      acc = (acc + ((bytes[i] + i) * 31)) & 0x7fffffff;
+    }
+    final mixed = bytes.map((b) => b ^ (acc & 0xFF)).toList();
+    return base64Url.encode(mixed);
+  }
+
+  Future<void> setGroupPassword(Group g, String password) async {
+    final salt = _randomSalt(20);
+    final hash = _fastHash(password, salt);
+    final idx = _groups.indexWhere((x) => x.id == g.id);
+    if (idx != -1) {
+      _groups[idx] = _groups[idx].copyWith(isPrivate: true, salt: salt, passHash: hash, updatedAt: DateTime.now());
+      await _persist(); notifyListeners();
+    }
+  }
+
+  Future<void> clearGroupPassword(Group g) async {
+    final idx = _groups.indexWhere((x) => x.id == g.id);
+    if (idx != -1) {
+      _groups[idx] = _groups[idx].copyWith(isPrivate: false, salt: null, passHash: null, updatedAt: DateTime.now());
+      await _persist(); notifyListeners();
+    }
+  }
+
+  Future<bool> verifyGroupPassword(Group g, String password) async {
+    final salt = g.salt;
+    final hash = g.passHash;
+    if (salt == null || hash == null) return false;
+    final candidate = _fastHash(password, salt);
+    return candidate == hash;
+  }
+
+  /* ======== Query ======== */
+
+  List<GridItem> getGridItems({String query = ''}) {
+    final q = query.trim().toLowerCase();
+    final singles = _notes.where((n) => n.groupId == null);
+    final gs = _groups.map((g) => GridItem.group(g)).toList();
+    final ns = singles
+        .where((n) => q.isEmpty ? true : (n.title + '\n' + n.text).toLowerCase().contains(q))
+        .map((n) => GridItem.note(n))
+        .toList();
+    final filteredGroups = gs.where((gi) {
+      final g = gi.group!;
+      final inTitle = q.isEmpty ? true : g.title.toLowerCase().contains(q);
+      if (inTitle || q.isEmpty) return true;
+      return notesInGroup(g.id).any((n) => (n.title + '\n' + n.text).toLowerCase().contains(q));
+    }).toList();
+    filteredGroups.sort((a, b) => b.group!.updatedAt.compareTo(a.group!.updatedAt));
+    ns.sort((a, b) => b.note!.updatedAt.compareTo(a.note!.updatedAt));
+    return [...filteredGroups, ...ns];
+  }
+}
+
+/* ===================== GRID ITEM ===================== */
+
+class GridItem {
+  final Note? note;
+  final Group? group;
+  GridItem.note(this.note) : group = null;
+  GridItem.group(this.group) : note = null;
+  bool get isNote => note != null;
+  bool get isGroup => group != null;
+}
+
+/* ===================== HOME (NotesScreen) ===================== */
+
+class NotesScreen extends StatefulWidget {
+  const NotesScreen({super.key});
+  @override
+  State<NotesScreen> createState() => _NotesScreenState();
+}
+
+class _NotesScreenState extends State<NotesScreen> {
+  final store = NotesStore();
+  final _searchCtrl = TextEditingController();
+  bool _dragging = false;
+
+  @override
+  void initState() {
+    super.initState();
+    store.addListener(() => setState(() {}));
+    store.load();
+  }
+
+  @override
+  void dispose() {
+    store.dispose();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _shareQuick(String text) async {
+    await ShareHelper.shareText(text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final loaded = store.isLoaded;
+    final err = store.lastError;
+    final items = store.getGridItems(query: _searchCtrl.text);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: TextField(
+          controller: _searchCtrl,
+          decoration: const InputDecoration(hintText: 'Поиск…', isDense: true),
+          onChanged: (_) => setState(() {}),
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Настройки',
+            onPressed: _openSettings,
+            icon: const Icon(Icons.settings),
+          ),
+          IconButton(
+            tooltip: 'Добавить заметку',
+            onPressed: () => _openEditor(),
+            icon: const Icon(Icons.add),
+          ),
+        ],
+      ),
+      body: !loaded
+          ? const Center(child: CircularProgressIndicator())
+          : err != null
+              ? _ErrorPane(err: err, onReset: () => setState(() => store.load()))
+              : Stack(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8, left: 8, right: 8, bottom: 80),
+                      child: GridView.builder(
+                        itemCount: items.length,
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2, crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 0.95,
+                        ),
+                        itemBuilder: (c, i) {
+                          final it = items[i];
+                          if (it.isGroup) {
+                            final g = it.group!;
+                            final within = store.notesInGroup(g.id);
+                            return _DraggableTile(
+                              data: DragPayload.group(g.id),
+                              dragging: _dragging,
+                              child: _GroupCard(
+                                group: g,
+                                notes: within,
+                                onTap: () => _openGroup(g),
+                                onAcceptDrop: (payload) => _handleDropOnGroup(payload, g),
+                              ),
+                              onDragStart: () => setState(() => _dragging = true),
+                              onDragEnd: () => setState(() => _dragging = false),
+                            );
+                          } else {
+                            final n = it.note!;
+                            return _DraggableTile(
+                              data: DragPayload.note(n.id),
+                              dragging: _dragging,
+                              child: _NoteCardGrid(
+                                note: n,
+                                onTap: () => _openEditor(source: n),
+                                onAcceptDrop: (payload) => _handleDropOnNote(payload, n),
+                                onShare: () => _shareQuick(n.text),
+                              ),
+                              onDragStart: () => setState(() => _dragging = true),
+                              onDragEnd: () => setState(() => _dragging = false),
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                    if (_dragging)
+                      Positioned(
+                        top: 12, left: 12,
+                        child: _DeleteCorner(onAccept: (payload) => _handleDelete(payload)),
+                      ),
+                  ],
+                ),
+    );
+  }
+
+  void _openSettings() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => const SettingsSheet(),
+    );
+  }
+
+  Future<void> _handleDropOnNote(DragPayload payload, Note target) async {
+    if (payload.isNote) {
+      if (payload.id == target.id) return;
+      await store.createGroupWith(payload.id, target.id);
+    } else if (payload.isGroup) {
+      final gid = payload.id;
+      if (target.groupId == gid) return;
+      await store.addNoteToGroup(target.id, gid);
+    }
+  }
+
+  Future<void> _handleDropOnGroup(DragPayload payload, Group target) async {
+    if (payload.isNote) {
+      await store.addNoteToGroup(payload.id, target.id);
+    } else if (payload.isGroup) {
+      final source = payload.id;
+      if (source == target.id) return;
+      final moving = store.notesInGroup(source);
+      for (final n in moving) { await store.addNoteToGroup(n.id, target.id); }
+      await store.deleteGroup(source);
+    }
+  }
+
+  Future<void> _handleDelete(DragPayload payload) async {
+    final ok = await _confirm(
+      title: 'Удалить?',
+      message: payload.isNote ? 'Удалить эту заметку навсегда?' : 'Удалить группу и все её заметки?',
+      confirmText: 'Удалить',
+    );
+    if (ok != true) return;
+
+    if (payload.isNote) {
+      await store.deleteNote(payload.id);
+    } else if (payload.isGroup) {
+      await store.deleteGroup(payload.id);
+    }
+    setState(() => _dragging = false);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Удалено')));
+    }
+  }
+
+  Future<void> _openEditor({Note? source}) async {
+    final result = await showModalBottomSheet<NoteActionResult>(
+      context: context          break;
         default:
           themeMode = AppThemeMode.system;
       }
