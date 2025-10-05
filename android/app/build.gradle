@@ -1,63 +1,69 @@
 plugins {
     id "com.android.application"
     id "kotlin-android"
-    // подключается через settings.gradle (flutter)
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+def keystorePath = file("$rootDir/app/auto-release.jks")
+def hasKeystore = keystorePath.exists()
+
 android {
-    namespace "com.example.notice_app"   // при необходимости поменяй на свой
+    namespace "com.example.notice_app"
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.example.notice_app" // тоже можно поменять
+        applicationId "com.example.notice_app"
         minSdk 23
-        targetSdk 36
+        targetSdk 34
         versionCode 1
         versionName "1.0"
         multiDexEnabled true
     }
 
-    // Используем keystore, который CI создаёт как android/app/auto-release.jks
     signingConfigs {
         release {
-            storeFile file("auto-release.jks")
-            storePassword "android"
-            keyAlias "androiddebugkey"
-            keyPassword "android"
+            // заполняем конфиг подписи только если файл реально есть
+            if (hasKeystore) {
+                storeFile keystorePath
+                storePassword System.getenv("STORE_PASS") ?: ""
+                keyAlias System.getenv("KEY_ALIAS") ?: ""
+                keyPassword System.getenv("KEY_PASS") ?: ""
+            }
         }
     }
 
     buildTypes {
         release {
-            signingConfig signingConfigs.release
+            // если keystore есть — подпишем; если нет — просто соберём unsigned
+            if (hasKeystore) {
+                signingConfig signingConfigs.release
+            }
+            // не используем шринк, чтобы проще отлавливать ошибки ресурсов
             minifyEnabled false
             shrinkResources false
         }
         debug {
-            signingConfig signingConfigs.release
+            // отладка как обычно
         }
     }
 
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+    buildFeatures {
+        buildConfig true
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-}
 
-flutter {
-    source '../..'
+    packagingOptions {
+        resources.excludes += [
+                'META-INF/LICENSE*',
+                'META-INF/AL2.0',
+                'META-INF/LGPL2.1'
+        ]
+    }
 }
 
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:${libs.versions.kotlin.get()}"
+}
 
-    // ВАЖНО: чтобы был доступен Theme.Material3.DayNight.NoActionBar
-    implementation "com.google.android.material:material:1.12.0"
-
-    // Рекомендуется иметь core-ktx
-    implementation "androidx.core:core-ktx:1.13.1"
+flutter {
+    source "../.."
 }
