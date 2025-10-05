@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK (Gradle only)
 
 on:
   push:
@@ -22,31 +22,22 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Flutter (stable)
+      - name: Setup Flutter (stable) + pub get
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
       - name: Flutter pub get
-        run: flutter pub get
-
-      - name: Build APK (flutter)
-        continue-on-error: true
         run: |
-          echo "▶ flutter build apk --release"
           flutter clean
-          flutter build apk --release
-          echo "🔎 find APKs after flutter build:"
-          find build -type f -name "*.apk" -print || true
+          flutter pub get
 
-      - name: Fallback build (Gradle assembleRelease)
-        if: ${{ always() }}
-        continue-on-error: true
+      - name: Build release via Gradle (assembleRelease)
         run: |
-          echo "▶ Gradle fallback: :app:assembleRelease"
+          set -euo pipefail
           cd android
-          # если wrapper отсутствует — создаём
+          # Если wrapper отсутствует — создадим
           if [ ! -f "./gradlew" ]; then
             echo "gradlew not found, generating wrapper..."
             sudo apt-get update && sudo apt-get install -y gradle
@@ -54,9 +45,13 @@ jobs:
           fi
           chmod +x ./gradlew
           ./gradlew -v || true
-          ./gradlew :app:assembleRelease --info --stacktrace || true
+
+          # ВАЖНО: собираем напрямую Gradle'ом — без flutter build apk
+          ./gradlew :app:assembleRelease --info --stacktrace
+
           echo "📁 android/app/build/outputs tree:"
           ls -R app/build/outputs || true
+          cd ..
 
       - name: Collect APKs
         run: |
