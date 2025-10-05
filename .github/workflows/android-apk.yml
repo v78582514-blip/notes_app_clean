@@ -46,7 +46,7 @@ jobs:
         run: |
           echo "▶ Gradle fallback: :app:assembleRelease"
           cd android
-          # если wrapper отсутствует — создадим
+          # если wrapper отсутствует — создаём
           if [ ! -f "./gradlew" ]; then
             echo "gradlew not found, generating wrapper..."
             sudo apt-get update && sudo apt-get install -y gradle
@@ -60,15 +60,20 @@ jobs:
 
       - name: Collect APKs
         run: |
+          set -e
           echo "▶ Collecting APKs"
           mkdir -p artifacts
-          # Все типичные места
-          ( find build/app/outputs/flutter-apk -type f -name "*release*.apk" -print 2>/dev/null || true )
-          ( find android/app/build/outputs/apk -type f -name "*release*.apk" -print 2>/dev/null || true )
-          ( find build -maxdepth 4 -type f -name "*release*.apk" -print 2>/dev/null || true ) \
-            | sort -u | tee found_apks.txt
 
-          if [ ! -s found_apks.txt ]; then
+          # Ищем APK во всех типичных местах и формируем единый список
+          FOUND=$(
+            {
+              find android/app/build/outputs/apk         -type f -name "*release*.apk" -print 2>/dev/null || true
+              find android/app/build/outputs/flutter-apk -type f -name "*release*.apk" -print 2>/dev/null || true
+              find build                                 -maxdepth 4 -type f -name "*release*.apk" -print 2>/dev/null || true
+            } | sort -u
+          )
+
+          if [ -z "$FOUND" ]; then
             echo "❌ Не найдено ни одного release APK."
             echo "🔎 build/app/outputs:"
             ls -R build/app/outputs || true
@@ -78,13 +83,14 @@ jobs:
           fi
 
           echo "✅ Найдены APK:"
-          cat found_apks.txt
+          echo "$FOUND"
 
+          echo "📦 Копируем APK в artifacts/ …"
           while IFS= read -r apk; do
-            cp -v "$apk" artifacts/
-          done < found_apks.txt
+            [ -n "$apk" ] && cp -v "$apk" artifacts/
+          done <<< "$FOUND"
 
-          echo "📦 Итоговые файлы:"
+          echo "🎉 Готово. В artifacts лежат:"
           ls -l artifacts
 
       - name: Upload APK artifact
@@ -93,4 +99,3 @@ jobs:
           name: app-release-apk
           path: artifacts/*.apk
           if-no-files-found: error
-          
