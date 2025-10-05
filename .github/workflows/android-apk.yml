@@ -1,64 +1,117 @@
-name: 📦 Build Android APK
+name: 📦 Build & Sign Android APK (resilient)
 
 on:
   push:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
-
     env:
-      KEY_ALIAS: myKey
-      KEY_PASS: myPassword
-      STORE_PASS: myPassword
+      FLUTTER_VERSION: "3.24.0"
+      JAVA_VERSION: "17"
 
     steps:
-      - name: ⬇️ Checkout
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      - name: ☕ Setup Java 17
+      - name: ☕ Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
           cache: gradle
 
       - name: 🐦 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: "stable"
           cache: true
 
-      - name: 📦 flutter pub get
+      - name: 📦 Pub get
         run: flutter pub get
 
-      - name: 🔑 Generate temp keystore (optional)
+      # Подстраховка: гарантируем compileSdk=36 и minSdk=23
+      - name: 🔧 Force compileSdk(36) & minSdk(23)
+        run: |
+          FILE=android/app/build.gradle
+          if [ -f "$FILE" ]; then
+            sed -i 's/compileSdk\s*=\s*[0-9]\+/compileSdk = 36/g' "$FILE" || true
+            sed -i 's/compileSdkVersion\s\+[0-9]\+/compileSdkVersion 36/g' "$FILE" || true
+            sed -i 's/minSdk\s*=\s*[0-9]\+/minSdk = 23/g' "$FILE" || true
+            sed -i 's/minSdkVersion\s\+[0-9]\+/minSdkVersion 23/g' "$FILE" || true
+          fi
+          echo "🔎 android/app/build.gradle after patch:"
+          tail -n +1 android/app/build.gradle | sed -n '1,200p' | sed -n '1,120p' > /dev/null || true
+
+      # Если есть секреты — декодируем keystore и пишем key.properties
+      - name: 🔐 Prepare keystore (if secrets present)
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' }}
         run: |
           mkdir -p android/app
-          keytool -genkeypair -v \
-            -keystore android/app/auto-release.jks \
-            -storepass "$STORE_PASS" \
-            -keypass "$KEY_PASS" \
-            -alias "$KEY_ALIAS" \
-            -dname "CN=Notes,O=Notes,L=City,S=State,C=US" \
-            -keyalg RSA -keysize 2048 -validity 10000
-        shell: bash
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/auto-release.jks
+          cat > android/key.properties <<'EOF'
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=auto-release.jks
+          EOF
+          echo "✅ Keystore prepared: android/app/auto-release.jks"
 
-      - name: 🏗️ Build release APK
+      - name: 🚀 Build release APK
         run: |
-          flutter clean
+          # Если key.properties нет — просто соберём unsigned (Flutter сам это сделает)
           flutter build apk --release --no-shrink
-          echo "== Listing outputs =="
-          ls -R build/app/outputs || true
-          ls -R android/app/build/outputs || true
 
-      - name: 📤 Upload APK
+      - name: 🗂️ List outputs
+        run: |
+          echo "▶ build/app/outputs/flutter-apk"
+          ls -lah build/app/outputs/flutter-apk || true
+          echo "▶ android/app/build/outputs/apk"
+          ls -lah android/app/build/outputs/apk || true
+          echo "▶ android/app/build/outputs"
+          ls -lah android/app/build/outputs || true
+
+      - name: 🔎 Locate APK
+        id: locate
+        shell: bash
+        run: |
+          set -e
+          APK=""
+          # 1) стандартный путь Flutter
+          if [ -f build/app/outputs/flutter-apk/app-release.apk ]; then
+            APK=build/app/outputs/flutter-apk/app-release.apk
+          fi
+          # 2) Gradle путь релизного APK
+          if [ -z "$APK" ] && [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
+            APK=android/app/build/outputs/apk/release/app-release.apk
+          fi
+          # 3) Если подписи нет — unsigned
+          if [ -z "$APK" ] && [ -f android/app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+            APK=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          fi
+          # 4) Поиск по маске на всякий случай
+          if [ -z "$APK" ]; then
+            APK=$(find build android -type f -name "app-release*.apk" | head -n 1 || true)
+          fi
+
+          if [ -z "$APK" ]; then
+            echo "❌ APK not found"
+            exit 1
+          fi
+
+          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+          echo "✅ Found APK: $APK"
+
+      - name: ☁️ Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: notice_app_release
-          path: |
-            build/app/outputs/flutter-apk/app-release.apk
-            android/app/build/outputs/flutter-apk/app-release.apk
+          name: release-apk
+          path: ${{ steps.locate.outputs.apk_path }}
           if-no-files-found: error
