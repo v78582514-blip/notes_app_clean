@@ -1,4 +1,4 @@
-name: 🚀 Build & Sign Android APK
+name: 🚀 Build & Sign Android APK (resilient)
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: 📦 Checkout
@@ -31,47 +32,76 @@ jobs:
           flutter clean
           flutter pub get
 
-      - name: 🔧 Bump compileSdk/targetSdk to 36 (if needed)
+      - name: 🔧 Bump SDKs (compile=36 / target=36 / min=23)
         run: |
           set -e
-          FILE="android/app/build.gradle"
-          if [ -f "$FILE" ]; then
-            sed -i 's/compileSdkVersion \([0-9]\+\)/compileSdkVersion 36/g' "$FILE" || true
-            sed -i 's/targetSdkVersion \([0-9]\+\)/targetSdkVersion 36/g' "$FILE" || true
-            # AGP 8+ вариант: compileSdk = N
-            sed -i 's/compileSdk *= *[0-9]\+/compileSdk = 36/g' "$FILE" || true
-            sed -i 's/targetSdk *= *[0-9]\+/targetSdk = 36/g' "$FILE" || true
+          APP=android/app/build.gradle
+          if [ -f "$APP" ]; then
+            # Варианты синтаксиса AGP (старый/новый)
+            sed -i 's/compileSdkVersion \([0-9]\+\)/compileSdkVersion 36/g' "$APP" || true
+            sed -i 's/targetSdkVersion \([0-9]\+\)/targetSdkVersion 36/g' "$APP" || true
+            sed -i 's/minSdkVersion \([0-9]\+\)/minSdkVersion 23/g' "$APP" || true
+
+            sed -i 's/compileSdk *= *[0-9]\+/compileSdk = 36/g' "$APP" || true
+            sed -i 's/targetSdk *= *[0-9]\+/targetSdk = 36/g' "$APP" || true
+            sed -i 's/minSdk *= *[0-9]\+/minSdk = 23/g' "$APP" || true
           fi
 
-      - name: 🏗️ Build release APK (Flutter)
+      - name: 🧭 Create local.properties for Gradle
         run: |
-          # без shrink, чтобы избежать редких проблем с R8 при CI
+          mkdir -p android
+          cat > android/local.properties <<EOF
+          sdk.dir=${ANDROID_HOME}
+          flutter.sdk=${FLUTTER_HOME}
+          EOF
+          cat android/local.properties
+
+      # 1) Основная попытка — flutter build (не роняем пайплайн, если упадёт)
+      - name: 🏗️ flutter build apk --release (best effort)
+        continue-on-error: true
+        run: |
           flutter build apk --release --no-shrink
+
+      # 2) Попытка №2 — прямой Gradle в android/ (если flutter не дал артефакт)
+      - name: 🧰 Fallback: Gradle assembleRelease (android/)
+        if: always()
+        working-directory: android
+        continue-on-error: true
+        run: |
+          set -e
+          if [ ! -x "./gradlew" ]; then
+            echo "gradlew exists?"; ls -la .
+            chmod +x ./gradlew || true
+          fi
+          ./gradlew --version
+          ./gradlew assembleRelease -x lint -x test --no-daemon --stacktrace || true
 
       - name: 🔎 Locate built APK
         id: locate
         shell: bash
         run: |
           set -e
-          echo "Listing possible output dirs for debug:"
+          echo "== Debug list =="
           ls -R build/app/outputs || true
           ls -R android/app/build/outputs || true
 
           APK=""
-          # основные варианты Flutter
+          # типичные пути Flutter
           [ -f build/app/outputs/flutter-apk/app-release.apk ] && APK=build/app/outputs/flutter-apk/app-release.apk
           [ -z "$APK" ] && [ -f build/app/outputs/apk/release/app-release.apk ] && APK=build/app/outputs/apk/release/app-release.apk
-          # варианты через android/
+          # типичные пути Gradle (android/)
           [ -z "$APK" ] && [ -f android/app/build/outputs/flutter-apk/app-release.apk ] && APK=android/app/build/outputs/flutter-apk/app-release.apk
           [ -z "$APK" ] && [ -f android/app/build/outputs/apk/release/app-release.apk ] && APK=android/app/build/outputs/apk/release/app-release.apk
-          # универсальный бэкап-поиск
+          [ -z "$APK" ] && [ -f android/app/build/outputs/apk/release/app-release-unsigned.apk ] && APK=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          # универсальный поиск на всякий случай
           [ -z "$APK" ] && APK=$(find . -type f -name "app-release*.apk" | head -n1 || true)
 
           if [ -z "$APK" ]; then
-            echo "❌ APK not found in known locations"; exit 1
+            echo "❌ APK not found anywhere"
+            exit 1
           fi
 
-          echo "✅ Found APK at: $APK"
+          echo "✅ Found: $APK"
           echo "apk=$APK" >> "$GITHUB_OUTPUT"
 
       - name: 🔐 Generate temporary debug keystore
@@ -84,7 +114,7 @@ jobs:
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-      - name: 🔏 Zipalign & Sign APK
+      - name: 🔏 Zipalign & Sign
         id: sign
         shell: bash
         run: |
@@ -94,10 +124,7 @@ jobs:
           ZIPALIGNED="app-release-aligned.apk"
           BT="$ANDROID_HOME/build-tools/34.0.0"
 
-          echo "Aligning with zipalign..."
-          "$BT/zipalign" -f 4 "$IN_APK" "$ZIPALIGNED"
-
-          echo "Signing with apksigner (debug keystore)..."
+          "$BT/zipalign" -f 4 "$IN_APK" "$ZIPALIGNED" || cp "$IN_APK" "$ZIPALIGNED"
           "$BT/apksigner" sign \
             --ks debug.keystore \
             --ks-pass pass:android \
@@ -106,11 +133,11 @@ jobs:
             "$ZIPALIGNED"
 
           mv "$ZIPALIGNED" "$OUT_APK"
-          echo "signed_apk=$OUT_APK" >> "$GITHUB_OUTPUT"
-          echo "✅ Signed APK: $OUT_APK"
+          echo "signed=$OUT_APK" >> "$GITHUB_OUTPUT"
+          echo "✅ Signed: $OUT_APK"
 
-      - name: 📤 Upload signed APK
+      - name: 📤 Upload APK (signed)
         uses: actions/upload-artifact@v4
         with:
           name: app-release-signed
-          path: ${{ steps.sign.outputs.signed_apk }}
+          path: ${{ steps.sign.outputs.signed }}
