@@ -18,17 +18,14 @@ jobs:
       KEYSTORE_FILE: "android/app/auto-release.jks"
 
     steps:
-      # 1️⃣ Клонирование репозитория
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ Установка Flutter
       - name: 🧱 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.0'
 
-      # 3️⃣ Генерация временного keystore
       - name: 🔐 Generate keystore
         run: |
           keytool -genkeypair \
@@ -42,21 +39,17 @@ jobs:
             -keypass $KEY_PASS \
             -dname "CN=GitHub, OU=CI, O=NoticeApp, L=Internet, S=Web, C=US"
 
-      # 4️⃣ Установка зависимостей
       - name: 📦 Install dependencies
         run: flutter pub get
 
-      # 5️⃣ Очистка проекта
       - name: 🧹 Clean project
         run: flutter clean
 
-      # 6️⃣ Сборка релизного APK
       - name: 🏗️ Build release APK
         run: flutter build apk --release
 
-      # 7️⃣ Загрузка артефакта APK (новая версия action)
       - name: 📤 Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: notice_app_apk
+          name: notice_app_release
           path: build/app/outputs/flutter-apk/app-release.apk
