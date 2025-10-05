@@ -4,9 +4,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:share_plus/share_plus.dart';
 
-/* ===================== BOOT ===================== */
+/* ======== BOOT ======== */
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,7 +13,7 @@ Future<void> main() async {
   runZonedGuarded(() => runApp(const NotesApp()), (e, s) {});
 }
 
-/* ===================== SETTINGS (theme only) ===================== */
+/* ======== SETTINGS (theme only) ======== */
 
 final settings = SettingsStore();
 
@@ -47,11 +46,11 @@ class SettingsStore extends ChangeNotifier {
     await p.setString(
       _k,
       jsonEncode({
-        'theme': themeMode == AppThemeMode.light
-            ? 'light'
-            : themeMode == AppThemeMode.dark
-                ? 'dark'
-                : 'system',
+        'theme': switch (themeMode) {
+          AppThemeMode.light => 'light',
+          AppThemeMode.dark => 'dark',
+          _ => 'system'
+        }
       }),
     );
   }
@@ -62,20 +61,14 @@ class SettingsStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  ThemeMode get flutterThemeMode {
-    switch (themeMode) {
-      case AppThemeMode.light:
-        return ThemeMode.light;
-      case AppThemeMode.dark:
-        return ThemeMode.dark;
-      case AppThemeMode.system:
-      default:
-        return ThemeMode.system;
-    }
-  }
+  ThemeMode get flutterThemeMode => switch (themeMode) {
+        AppThemeMode.light => ThemeMode.light,
+        AppThemeMode.dark => ThemeMode.dark,
+        _ => ThemeMode.system,
+      };
 }
 
-/* ===================== APP ===================== */
+/* ======== APP ======== */
 
 class NotesApp extends StatelessWidget {
   const NotesApp({super.key});
@@ -108,7 +101,7 @@ class NotesApp extends StatelessWidget {
   }
 }
 
-/* ===================== MODELS ===================== */
+/* ======== MODELS ======== */
 
 class Note {
   String id;
@@ -186,10 +179,10 @@ class Group {
   String title;
   DateTime updatedAt;
 
-  // Приватность (без внешних пакетов)
+  // Приватность
   bool isPrivate;
-  String? salt;     // случайная «соль»
-  String? passHash; // лёгкая обфускация (не для чувствительных данных)
+  String? salt; // случайная «соль»
+  String? passHash; // лёгкая обфускация (без внешних пакетов)
 
   Group({
     required this.id,
@@ -236,10 +229,10 @@ class Group {
       );
 }
 
-/* ===================== STORE ===================== */
+/* ======== STORE ======== */
 
 class NotesStore extends ChangeNotifier {
-  static const _prefsKey = 'notes_v9_privacy_auto_save_share_numbering';
+  static const _prefsKey = 'notes_v10_privacy_autosave_native_share';
   final List<Note> _notes = [];
   final List<Group> _groups = [];
   bool _loaded = false;
@@ -509,7 +502,7 @@ class NotesStore extends ChangeNotifier {
   }
 }
 
-/* ===================== GRID / HOME ===================== */
+/* ======== GRID / HOME ======== */
 
 class NotesHomePage extends StatefulWidget {
   const NotesHomePage({super.key});
@@ -697,10 +690,9 @@ class _NotesHomePageState extends State<NotesHomePage> {
 
     if (result.delete) {
       final ok = await _confirm(
-        title: 'Удалить заметку?',
-        message: 'Действие необратимо.',
-        confirmText: 'Удалить',
-      );
+          title: 'Удалить заметку?',
+          message: 'Действие необратимо.',
+          confirmText: 'Удалить');
       if (ok == true) {
         await store.deleteNote(result.note.id);
       }
@@ -780,7 +772,7 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 }
 
-/* ===================== SETTINGS SHEET ===================== */
+/* ======== SETTINGS SHEET ======== */
 
 class SettingsSheet extends StatefulWidget {
   const SettingsSheet({super.key});
@@ -854,7 +846,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
   }
 }
 
-/* ===================== GRID CARDS ===================== */
+/* ======== GRID CARDS ======== */
 
 class _NoteCardGrid extends StatelessWidget {
   final Note note;
@@ -1020,7 +1012,7 @@ class _GroupCard extends StatelessWidget {
   }
 }
 
-/* ===================== DRAG & DROP ===================== */
+/* ======== DRAG & DROP ======== */
 
 class DragPayload {
   final String id;
@@ -1100,7 +1092,7 @@ class _DeleteCorner extends StatelessWidget {
   }
 }
 
-/* ===================== NOTE EDITOR (numbering + share) ===================== */
+/* ======== NOTE EDITOR (numbering + share) ======== */
 
 class NoteActionResult {
   final Note note;
@@ -1173,7 +1165,7 @@ class _NoteEditorState extends State<NoteEditor> {
   int _lineStartIndex(String text, int pos) {
     final prev = text.lastIndexOf('\n', pos - 1);
     return prev == -1 ? 0 : prev + 1;
-    }
+  }
 
   String _lineAt(String text, int pos) {
     final start = _lineStartIndex(text, pos);
@@ -1181,24 +1173,13 @@ class _NoteEditorState extends State<NoteEditor> {
     return text.substring(start, end == -1 ? text.length : end);
   }
 
-  String _lineBefore(String text, int pos) {
-    final i = text.lastIndexOf('\n', pos - 1);
-    if (i == -1) return text.substring(0, pos);
-    final j = text.lastIndexOf('\n', i - 1);
-    final start = j == -1 ? 0 : j + 1;
-    return text.substring(start, i);
-  }
-
   Future<void> _share() async {
     final content = _text.text; // только текст, как есть
-    if (content.trim().isEmpty) return;
-    await Share.share(content);
+    await ShareHelper.shareText(content);
   }
 
   @override
   Widget build(BuildContext context) {
-    final color = _model.colorHex != null ? Color(_model.colorHex!) : null;
-
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(
@@ -1342,7 +1323,7 @@ class _NoteEditorState extends State<NoteEditor> {
   }
 }
 
-/* === ВСТАВКА: inputFormatter для нумерации, работает и на мобильных === */
+/* === Numbering inputFormatter (работает на мобильной клавиатуре) === */
 
 class NumberingFormatter extends TextInputFormatter {
   final bool Function() isEnabled;
@@ -1357,9 +1338,8 @@ class NumberingFormatter extends TextInputFormatter {
     final neu = newValue.text;
     final insPos = newValue.selection.baseOffset;
 
-    // Обработка простого Enter: разница на 1 символ, это '\n' прямо перед курсором
+    // Вставка \n?
     if (insPos > 0 && neu.length == old.length + 1 && neu[insPos - 1] == '\n') {
-      // Найти предыдущую строку (до вставленного \n)
       final prevNL = neu.lastIndexOf('\n', insPos - 2);
       final start = prevNL == -1 ? 0 : prevNL + 1;
       final prevLine = neu.substring(start, insPos - 1);
@@ -1388,7 +1368,7 @@ class NumberingFormatter extends TextInputFormatter {
   }
 }
 
-/* ===================== GROUP EDITOR (auto-save, no Save button) ===================== */
+/* ======== GROUP EDITOR (auto-save, no Save button) ======== */
 
 class GroupEditor extends StatefulWidget {
   final NotesStore store;
@@ -1606,7 +1586,7 @@ class _GroupEditorState extends State<GroupEditor> {
                               setState(() {});
                               break;
                             case 'share':
-                              await Share.share(n.text);
+                              await ShareHelper.shareText(n.text);
                               break;
                           }
                         },
@@ -1641,7 +1621,7 @@ class _GroupEditorState extends State<GroupEditor> {
   }
 }
 
-/* ===================== COMMON WIDGETS ===================== */
+/* ======== COMMON WIDGETS & UTILS ======== */
 
 class _ErrorPane extends StatelessWidget {
   final String err;
@@ -1755,7 +1735,7 @@ String _fmtDate(DateTime dt) {
   return '${two(d.day)}.${two(d.month)}.${d.year} ${two(d.hour)}:${two(d.minute)}';
 }
 
-/* ===================== GRID ITEM WRAPPER ===================== */
+/* ======== GRID ITEM WRAPPER ======== */
 
 class GridItem {
   final Note? note;
@@ -1765,3 +1745,21 @@ class GridItem {
   bool get isNote => note != null;
   bool get isGroup => group != null;
 }
+
+/* ======== Native share helper (MethodChannel) ======== */
+
+class ShareHelper {
+  static const _ch = MethodChannel('app.share');
+
+  static Future<void> shareText(String text) async {
+    final content = text.trim();
+    if (content.isEmpty) return;
+    try {
+      await _ch.invokeMethod('shareText', {'text': content});
+    } catch (_) {
+      // Фолбэк: копируем в буфер, чтобы не потерять контент
+      await Clipboard.setData(ClipboardData(text: content));
+    }
+  }
+}
+
