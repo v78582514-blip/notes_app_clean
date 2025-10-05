@@ -13,7 +13,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # Считываем секреты в переменные ОКРУЖЕНИЯ один раз, а не в шагах
     env:
       JAVA_VERSION: "17"
       FLUTTER_VERSION: "3.24.0"
@@ -67,13 +66,46 @@ jobs:
           } > android/key.properties
           echo "Keystore ready"
 
-      - name: 🚀 Build APK (release)
-        run: flutter build apk --release --no-shrink
+      - name: 🧭 Create local.properties (SDK/Flutter)
+        run: |
+          ANDROID_SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          FLUTTER_BIN="$(which flutter)"
+          # /opt/hostedtoolcache/flutter/3.24.0-stable/x64/flutter/bin/flutter -> two parents up = flutter root
+          FLUTTER_ROOT="$(dirname "$(dirname "$FLUTTER_BIN")")"
+          mkdir -p android
+          {
+            echo "sdk.dir=$ANDROID_SDK_DIR"
+            echo "flutter.sdk=$FLUTTER_ROOT"
+          } > android/local.properties
+          cat android/local.properties
 
-      # Используем фиксированный путь flutter-апк, чтобы не писать выражения в with:
-      - name: ☁️ Upload APK
+      - name: 🚀 Build APK with Gradle (release)
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace \
+            assembleRelease \
+            -Ptarget-platform=android-arm,android-arm64,android-x64 \
+            -x lint
+
+      - name: 🧾 List outputs for debug
+        run: |
+          echo "== android/app/build/outputs =="
+          ls -R android/app/build/outputs || true
+          echo "== build/app/outputs =="
+          ls -R build/app/outputs || true
+
+      # Загружаем оба возможных пути. Если файла нет — игнорируем, но хотя бы один найдётся.
+      - name: ☁️ Upload APK (flutter-apk)
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk
+          name: release-apk-flutter-path
           path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: ignore
+
+      - name: ☁️ Upload APK (gradle-apk)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk-gradle-path
+          path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
