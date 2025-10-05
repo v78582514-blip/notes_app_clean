@@ -9,6 +9,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      KEY_ALIAS: myKey
+      KEY_PASS: myPassword
+      STORE_PASS: myPassword
+
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -29,6 +34,18 @@ jobs:
       - name: 📦 flutter pub get
         run: flutter pub get
 
+      - name: 🔑 Generate temp keystore (optional)
+        run: |
+          mkdir -p android/app
+          keytool -genkeypair -v \
+            -keystore android/app/auto-release.jks \
+            -storepass "$STORE_PASS" \
+            -keypass "$KEY_PASS" \
+            -alias "$KEY_ALIAS" \
+            -dname "CN=Notes,O=Notes,L=City,S=State,C=US" \
+            -keyalg RSA -keysize 2048 -validity 10000
+        shell: bash
+
       - name: 🏗️ Build release APK
         run: |
           flutter clean
@@ -41,7 +58,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: notice_app_release
-          # ВАЖНО: многострочная строка (|) и корректные отступы.
           path: |
             build/app/outputs/flutter-apk/app-release.apk
             android/app/build/outputs/flutter-apk/app-release.apk
