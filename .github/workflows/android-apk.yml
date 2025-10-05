@@ -2,7 +2,7 @@ name: Build & Sign Android APK (resilient)
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "notes_app_clean" ]
   workflow_dispatch:
 
 jobs:
