@@ -4,25 +4,18 @@ pluginManagement {
         mavenCentral()
         gradlePluginPortal()
     }
-
-    // Подключаем Flutter Gradle плагин из SDK Flutter
-    def flutterSdkPath = {
-        def props = new Properties()
-        def localProps = new File(rootProject.projectDir, "local.properties")
-        if (localProps.exists()) {
-            localProps.withReader("UTF-8") { reader -> props.load(reader) }
-        }
-        def sdkPath = props.getProperty("flutter.sdk")
-        assert sdkPath != null : "flutter.sdk не найден в local.properties"
-        return sdkPath
-    }()
-    includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
+    plugins {
+        id "com.android.application" version "8.6.0"
+        id "org.jetbrains.kotlin.android" version "2.1.0"
+        // Flutter Gradle plugin берём с портала
+        id "dev.flutter.flutter-gradle-plugin" version "1.0.0" apply false
+    }
 }
 
 plugins {
     id "dev.flutter.flutter-plugin-loader" version "1.0.0"
-    id "com.android.application" version "8.4.2" apply false
-    id "org.jetbrains.kotlin.android" version "1.9.24" apply false
+    id "com.android.application" apply false
+    id "org.jetbrains.kotlin.android" apply false
 }
 
-include(":app")
+include ":app"
