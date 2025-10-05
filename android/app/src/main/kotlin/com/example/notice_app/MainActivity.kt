@@ -1,4 +1,4 @@
-package com.example.notice_app  // ← замени, если у тебя другой applicationId
+package com.example.notice_app   // ← замени на свой пакет, если он другой
 
 import android.content.Intent
 import io.flutter.embedding.android.FlutterActivity
