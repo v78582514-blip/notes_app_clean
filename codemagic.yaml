@@ -93,3 +93,10 @@ workflows:
 
     artifacts:
       - build/app/outputs/flutter-apk/**/*.apk
+
+scripts:
+  - name: Pub get
+    script: flutter pub get
+  - name: Build release APK
+    script: flutter build apk --release
+    
