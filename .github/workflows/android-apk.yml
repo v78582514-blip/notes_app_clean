@@ -1,4 +1,4 @@
-name: Build & Sign Android APK
+name: Build & Sign Android APK (resilient)
 
 on:
   push:
@@ -10,7 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CI: true
-      # Фикс багов watch'ера и более тихий демон
       GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false"
       KEY_ALIAS: myKey
       KEY_PASS: myPassword
@@ -38,7 +37,6 @@ jobs:
           flutter clean
           flutter pub get
 
-      # Не ставим gradle через apt (там 4.x), скачиваем 8.7 и генерим wrapper
       - name: Ensure Gradle wrapper (download Gradle ${GRADLE_VERSION})
         run: |
           set -euo pipefail
@@ -47,70 +45,76 @@ jobs:
             echo "No gradlew -> downloading Gradle ${GRADLE_VERSION} to create wrapper..."
             curl -sL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o gradle.zip
             unzip -q gradle.zip
-            ./gradle-${GRADLE_VERSION}/bin/gradle --version
             ./gradle-${GRADLE_VERSION}/bin/gradle wrapper --gradle-version ${GRADLE_VERSION}
           fi
           chmod +x ./gradlew
           ./gradlew --version
           cd ..
 
-      # УСТОЙЧИВАЯ СБОРКА: если Gradle вернул 1, но APK есть — не падать
-      - name: Build release via Gradle (resilient)
+      # 1) Пытаемся собрать через Gradle. Даже если упадёт — не останавливаем job.
+      - name: Build via Gradle (assembleRelease, tolerant)
         id: build_gradle
+        continue-on-error: true
         run: |
-          set +e  # НЕ прерываемся на ошибке — сначала попробуем забрать APK
+          set -e
           cd android
-          echo "🚀 Building APK (disable FS watcher)…"
-          ./gradlew :app:assembleRelease \
-            --no-watch-fs \
-            --info --stacktrace --warning-mode all --console=plain
-          BUILD_RC=$?
-          echo "📁 outputs tree:"
+          echo "🚀 Gradle assembleRelease (no FS watcher)…"
+          ./gradlew :app:assembleRelease --no-watch-fs --info --stacktrace --warning-mode all --console=plain || true
+          echo "📁 outputs:"
           ls -R app/build/outputs || true
           cd ..
 
-          # Ищем релизные APK
-          FOUND=$( ( find android/app/build/outputs/apk/release -type f -name "*release*.apk" -print 2>/dev/null || true ) | sort -u )
-          echo "FOUND APKs:"
-          echo "$FOUND"
-
-          if [ -n "$FOUND" ]; then
-            echo "apk_found=true" >> "$GITHUB_OUTPUT"
-            echo "✅ APK найден, продолжаем, даже если Gradle вернул код $BUILD_RC"
-            exit 0
+      # 2) Если Gradle не дал APK — делаем Fallback через flutter build apk
+      - name: Fallback: flutter build apk --release
+        if: ${{ !cancelled() }}
+        run: |
+          set -e
+          # Уже есть релизный APK из Gradle?
+          if find android/app/build/outputs/apk/release -type f -name "*release*.apk" | grep -q . ; then
+            echo "✅ Gradle produced release APKs — fallback не нужен."
           else
-            echo "apk_found=false" >> "$GITHUB_OUTPUT"
-            echo "❌ APK не найден. Код Gradle: $BUILD_RC"
-            # Печатаем полезные логи, чтобы увидеть первопричину
-            echo "🔎 manifest-merger logs:"
-            cat android/app/build/outputs/logs/manifest-merger-release-report.txt 2>/dev/null || true
-            echo "🔎 Gradle reports:"
-            ls -R android/app/build/reports 2>/dev/null || true
-            exit $BUILD_RC
+            echo "🧰 Gradle APK отсутствует — запускаем flutter build apk --release"
+            flutter build apk --release --no-shrink
+            echo "📁 flutter outputs:"
+            ls -R build/app/outputs || true
           fi
 
-      - name: Locate unsigned/release APK
+      # 3) Выбираем релизный APK (gradle или flutter)
+      - name: Locate release APK
         id: locate
         run: |
           set -euo pipefail
-          FOUND=$( ( find android/app/build/outputs/apk/release -type f -name "*release*.apk" -print 2>/dev/null || true ) | sort -u )
+          FOUND=$(
+            { find android/app/build/outputs/apk/release -type f -name "*release*.apk" 2>/dev/null || true; \
+              find build/app/outputs/flutter-apk          -type f -name "*release*.apk" 2>/dev/null || true; } \
+            | sort -u
+          )
           echo "FOUND:"
           echo "$FOUND"
-          UNSIGNED=$(echo "$FOUND" | grep -E 'release.*-unsigned\.apk$' | head -n1 || true)
-          RELEASE=$(echo "$FOUND" | grep -E 'release.*\.apk$' | grep -v unsigned | head -n1 || true)
 
-          if [ -n "$UNSIGNED" ]; then
-            echo "apk_path=$UNSIGNED" >> "$GITHUB_OUTPUT"
-            echo "apk_type=unsigned"  >> "$GITHUB_OUTPUT"
-          elif [ -n "$RELEASE" ]; then
-            echo "apk_path=$RELEASE"  >> "$GITHUB_OUTPUT"
-            echo "apk_type=signed"    >> "$GITHUB_OUTPUT"
-          else
-            echo "❌ No release APKs found"
+          # Предпочтение: unsigned Gradle -> signed Gradle -> flutter apk
+          UNSIGNED=$(echo "$FOUND" | grep -E '/android/app/build/outputs/apk/release/.*-unsigned\.apk$' | head -n1 || true)
+          G_SIGNED=$(echo "$FOUND" | grep -E '/android/app/build/outputs/apk/release/.*release[^/]*\.apk$' | grep -v unsigned | head -n1 || true)
+          F_SIGNED=$(echo "$FOUND" | grep -E '/build/app/outputs/flutter-apk/.*release[^/]*\.apk$' | head -n1 || true)
+
+          CHOSEN=""
+          TYPE=""
+          if [ -n "$UNSIGNED" ]; then CHOSEN="$UNSIGNED"; TYPE="unsigned"; fi
+          if [ -z "$CHOSEN" ] && [ -n "$G_SIGNED" ]; then CHOSEN="$G_SIGNED"; TYPE="signed"; fi
+          if [ -z "$CHOSEN" ] && [ -n "$F_SIGNED" ]; then CHOSEN="$F_SIGNED"; TYPE="signed"; fi
+
+          if [ -z "$CHOSEN" ]; then
+            echo "❌ Release APK не найден."
+            echo "🔎 manifest-merger log:"
+            cat android/app/build/outputs/logs/manifest-merger-release-report.txt 2>/dev/null || true
             exit 1
           fi
-          echo "Chosen: ${{ steps.locate.outputs.apk_path }}"
 
+          echo "apk_path=$CHOSEN" >> "$GITHUB_OUTPUT"
+          echo "apk_type=$TYPE"   >> "$GITHUB_OUTPUT"
+          echo "Chosen: $CHOSEN ($TYPE)"
+
+      # 4) Если выбран unsigned — подпишем (zipalign + apksigner)
       - name: Generate temporary keystore (only if unsigned)
         if: steps.locate.outputs.apk_type == 'unsigned'
         run: |
@@ -132,13 +136,10 @@ jobs:
           APK="${{ steps.locate.outputs.apk_path }}"
           SDK_DIR="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
           BT_DIR=$(ls -d "$SDK_DIR/build-tools/"* | sort -V | tail -1)
-
           ZIPALIGN="$BT_DIR/zipalign"
           APKSIGNER="$BT_DIR/apksigner"
 
-          echo "Using build-tools: $BT_DIR"
           mkdir -p artifacts
-
           ALIGNED="artifacts/app-release-aligned.apk"
           "$ZIPALIGN" -v -p 4 "$APK" "$ALIGNED"
 
@@ -154,22 +155,22 @@ jobs:
           "$APKSIGNER" verify --verbose "$SIGNED"
           echo "✅ Signed APK: $SIGNED"
 
+      # 5) Собираем всё в artifacts
       - name: Collect APKs
         run: |
           set -e
           mkdir -p artifacts
-
+          # Подписанный Gradle
           if [ "${{ steps.locate.outputs.apk_type }}" = "signed" ]; then
-            cp -v "${{ steps.locate.outputs.apk_path }}" artifacts/app-release-signed-by-gradle.apk
+            cp -v "${{ steps.locate.outputs.apk_path }}" artifacts/$(basename "${{ steps.locate.outputs.apk_path }}")
           fi
-
-          {
-            find android/app/build/outputs/apk/release -type f -name "*release*.apk" -print 2>/dev/null || true
-            find android/app/build/outputs/flutter-apk -type f -name "*release*.apk" -print 2>/dev/null || true
-          } | sort -u | while read -r f; do
-            [ -f "$f" ] && cp -v "$f" "artifacts/$(basename "$f")"
-          done
-
+          # Подписанный нами
+          if [ -f artifacts/app-release-signed.apk ]; then
+            true
+          else
+            # Если подписывали не мы (flutter/gradle уже подписал), положим найденный APK
+            cp -v "${{ steps.locate.outputs.apk_path }}" artifacts/
+          fi
           echo "📦 Final artifacts:"
           ls -l artifacts
 
