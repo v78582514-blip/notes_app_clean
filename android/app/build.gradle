@@ -5,12 +5,12 @@ plugins {
 }
 
 android {
-    namespace "com.example.notice_app"         // ← если пакет другой — замени
+    namespace "com.example.notice_app"          // ← замени на свой package, если другой
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.example.notice_app" // ← если пакет другой — замени
-        minSdk 21
+        applicationId "com.example.notice_app"  // ← замени на свой package, если другой
+        minSdk 23                                // ✅ ВАЖНО: было 21, ставим 23
         targetSdk 36
         versionCode 1
         versionName "1.0"
@@ -25,24 +25,9 @@ android {
         jvmTarget = "17"
     }
 
-    buildTypes {
-        release {
-            // Пока без шринка — снимем риски на этапе починки пайплайна
-            minifyEnabled false
-            shrinkResources false
-            // Подпись только если заданы секреты (чтобы сборка не падала)
-            if (System.getenv("CM_KEYSTORE") != null) {
-                signingConfig signingConfigs.release
-            }
-        }
-        debug {
-            debuggable true
-        }
-    }
-
     signingConfigs {
-        // Используется ТОЛЬКО если Codemagic передал секреты
-        if (System.getenv("CM_KEYSTORE") != null) {
+        // Подпись подключаем, только если секреты заданы в CI
+        if (System.getenv("CM_KEYSTORE") != null || System.getenv("CM_KEYSTORE_PATH") != null) {
             release {
                 storeFile file(System.getenv("CM_KEYSTORE_PATH") ?: "keystore.jks")
                 storePassword System.getenv("CM_KEYSTORE_PASSWORD") ?: ""
@@ -52,9 +37,22 @@ android {
         }
     }
 
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            if (signingConfigs.findByName("release") != null) {
+                signingConfig signingConfigs.release
+            }
+        }
+        debug {
+            debuggable true
+        }
+    }
+
     packagingOptions {
         resources {
-            excludes += [ "META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/*.kotlin_module" ]
+            excludes += ["META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/*.kotlin_module"]
         }
     }
 }
