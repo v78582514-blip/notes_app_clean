@@ -5,18 +5,18 @@ plugins {
 }
 
 android {
-    namespace "com.example.notice_app"          // ← если у тебя другой пакет — подставь свой
+    namespace "com.example.notice_app"         // ← если пакет другой — замени
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.example.notice_app"  // ← тот же пакет
+        applicationId "com.example.notice_app" // ← если пакет другой — замени
         minSdk 21
         targetSdk 36
         versionCode 1
         versionName "1.0"
     }
 
-    // Java/Kotlin 17, чтобы не ловить несовпадение таргетов
+    // Java/Kotlin 17 (исправляет "Inconsistent JVM-target")
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -27,17 +27,43 @@ android {
 
     buildTypes {
         release {
+            // Пока без шринка — снимем риски на этапе починки пайплайна
             minifyEnabled false
             shrinkResources false
+            // Подпись только если заданы секреты (чтобы сборка не падала)
+            if (System.getenv("CM_KEYSTORE") != null) {
+                signingConfig signingConfigs.release
+            }
+        }
+        debug {
+            debuggable true
+        }
+    }
+
+    signingConfigs {
+        // Используется ТОЛЬКО если Codemagic передал секреты
+        if (System.getenv("CM_KEYSTORE") != null) {
+            release {
+                storeFile file(System.getenv("CM_KEYSTORE_PATH") ?: "keystore.jks")
+                storePassword System.getenv("CM_KEYSTORE_PASSWORD") ?: ""
+                keyAlias System.getenv("CM_KEY_ALIAS") ?: ""
+                keyPassword System.getenv("CM_KEY_PASSWORD") ?: ""
+            }
+        }
+    }
+
+    packagingOptions {
+        resources {
+            excludes += [ "META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/*.kotlin_module" ]
         }
     }
 }
 
 flutter {
-    source '../..'
+    source "../.."
 }
 
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.24"
-    implementation "com.google.android.material:material:1.12.0"   // ← добавлено
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:2.1.0"
+    implementation "com.google.android.material:material:1.12.0"
 }
