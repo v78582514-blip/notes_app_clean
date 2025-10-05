@@ -19,11 +19,12 @@ workflows:
           set -euo pipefail
           echo "🏗️ Собираем релиз..."
           BN=$(date +%s)
-          # Собираем универсальный APK (можно заменить на --split-per-abi)
+          # Универсальный APK (если нужны отдельные ABIs — см. комментарий ниже)
           flutter build apk --release \
             --build-number="$BN" \
             --build-name="1.0.$BN" \
             --no-shrink
+          echo "✅ Сборка завершена."
 
       - name: 🔹 Поиск и копирование APK
         script: |
@@ -33,38 +34,41 @@ workflows:
 
           mkdir -p build/publish
 
-          # Ищем по всем актуальным путям Flutter/AGP:
-          # - build/app/outputs/flutter-apk (современные Flutter)
-          # - build/app/outputs/apk        (старые плагины/шаблоны)
-          mapfile -t APKS < <( \
-            find build/app/outputs/flutter-apk -type f -name "*release*.apk" -print 2>/dev/null; \
-            find build/app/outputs/apk        -type f -name "*release*.apk" -print 2>/dev/null \
-          )
+          FOUND_LIST_FILE="$(mktemp)"
+          # Ищем во всех стандартных каталогах Flutter/AGP
+          ( find build/app/outputs/flutter-apk -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
+          ( find build/app/outputs/apk        -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
+          # Дополнительно просканируем build/**/outputs на случай нетипичных путей
+          ( find build -maxdepth 3 -type f -path "*/outputs/*" -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
 
-          if [ "${#APKS[@]}" -eq 0 ]; then
+          # Удалим дубликаты и пустые строки
+          sort -u "$FOUND_LIST_FILE" | sed '/^\s*$/d' > "${FOUND_LIST_FILE}.uniq"
+
+          if [ ! -s "${FOUND_LIST_FILE}.uniq" ]; then
             echo "❌ Не найдено ни одного release APK в стандартных путях."
+            echo "Отладка: содержимое build/app/outputs:"
+            ls -R build/app/outputs || true
             exit 1
           fi
 
           echo "✅ Найдены APK:"
-          for f in "${APKS[@]}"; do
-            echo "   - $f"
-          done
+          cat "${FOUND_LIST_FILE}.uniq"
 
           echo "📦 Копируем APK в build/publish ..."
-          for f in "${APKS[@]}"; do
-            cp -v "$f" build/publish/
-          done
+          while IFS= read -r apk; do
+            cp -v "$apk" build/publish/
+          done < "${FOUND_LIST_FILE}.uniq"
 
           echo "🎉 Готово. В build/publish лежат:"
           ls -l build/publish
 
     artifacts:
-      # Основной путь, куда мы всё сложили
+      # Основной каталог, куда мы сложили артефакты
       - build/publish/*.apk
-      # На всякий случай оставим прямые пути (если шаг копирования будет пропущен)
+      # На всякий случай — прямые пути, если выше пропустят копирование
       - build/app/outputs/flutter-apk/*.apk
       - build/app/outputs/apk/**/*.apk
+      - build/**/outputs/**/*.apk
 
     triggering:
       events:
@@ -73,3 +77,4 @@ workflows:
         - pattern: "*"
           include: true
           source: true
+          
