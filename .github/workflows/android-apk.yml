@@ -1,4 +1,4 @@
-name: 📦 Build & Sign Android APK (resilient)
+name: 📦 Build Android APK
 
 on:
   push:
@@ -12,9 +12,15 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    # Считываем секреты в переменные ОКРУЖЕНИЯ один раз, а не в шагах
     env:
-      FLUTTER_VERSION: "3.24.0"
       JAVA_VERSION: "17"
+      FLUTTER_VERSION: "3.24.0"
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
 
     steps:
       - name: 📥 Checkout
@@ -30,52 +36,44 @@ jobs:
       - name: 🐦 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: "stable"
           cache: true
 
-      - name: 📦 Get dependencies
+      - name: 📦 flutter pub get
         run: flutter pub get
 
-      - name: 🔧 Force compileSdk(36) & minSdk(23)
+      - name: 🔧 Patch compileSdk / minSdk
         run: |
-          FILE=android/app/build.gradle
+          FILE="android/app/build.gradle"
           if [ -f "$FILE" ]; then
             sed -i 's/compileSdk\s*=\s*[0-9]\+/compileSdk = 36/g' "$FILE" || true
             sed -i 's/compileSdkVersion\s\+[0-9]\+/compileSdkVersion 36/g' "$FILE" || true
             sed -i 's/minSdk\s*=\s*[0-9]\+/minSdk = 23/g' "$FILE" || true
             sed -i 's/minSdkVersion\s\+[0-9]\+/minSdkVersion 23/g' "$FILE" || true
           fi
-          echo "✅ Patched build.gradle to use compileSdk 36"
+          echo "OK: compileSdk=36, minSdk=23"
 
       - name: 🔐 Prepare keystore (if secrets present)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         run: |
           mkdir -p android/app
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/auto-release.jks
-          echo "storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" > android/key.properties
-          echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}" >> android/key.properties
-          echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" >> android/key.properties
-          echo "storeFile=auto-release.jks" >> android/key.properties
-          echo "✅ Keystore and key.properties created"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/auto-release.jks
+          {
+            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+            echo "keyPassword=$ANDROID_KEY_PASSWORD"
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "storeFile=auto-release.jks"
+          } > android/key.properties
+          echo "Keystore ready"
 
-      - name: 🚀 Build release APK
+      - name: 🚀 Build APK (release)
         run: flutter build apk --release --no-shrink
 
-      - name: 🔍 Find APK
-        id: locate
-        run: |
-          APK=$(find . -type f -name "app-release*.apk" | head -n 1 || true)
-          if [ -z "$APK" ]; then
-            echo "❌ No APK found!"
-            exit 1
-          fi
-          echo "apk_path=$APK" >> $GITHUB_OUTPUT
-          echo "✅ Found: $APK"
-
+      # Используем фиксированный путь flutter-апк, чтобы не писать выражения в with:
       - name: ☁️ Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
-          path: ${{ steps.locate.outputs.apk_path }}
+          path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
