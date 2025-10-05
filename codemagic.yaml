@@ -14,40 +14,72 @@ workflows:
           flutter clean
           flutter pub get
 
-      - name: 🔹 Сборка релизного APK (напрямую через Gradle)
+      - name: 🔹 Сборка релизного APK (через Gradle с автогенерацией wrapper)
         script: |
           set -euo pipefail
-          echo "🏗️ Собираем release через Gradle (без flutter build apk)…"
+          echo "🏗️ Собираем release через Gradle…"
           BN=$(date +%s)
-          # Обновим версию для Android (Gradle использует ее из local.properties? — нет.
-          # Поэтому Flutter-номер версии не обязателен. Главное — собрать assembleRelease)
-          pushd android >/dev/null
 
-          # Печатаем версии Gradle/Java для диагностики
+          # Переходим в android/
+          cd android
+
+          # 1) Если gradlew отсутствует — генерируем wrapper
+          if [ ! -f "./gradlew" ]; then
+            echo "⚠️ gradlew не найден. Генерируем Gradle Wrapper…"
+            # Проверим наличие системного gradle и сгенерируем wrapper нужной версии
+            if ! command -v gradle >/dev/null 2>&1; then
+              echo "❌ В окружении нет 'gradle'. Это нетипично для Codemagic."
+              echo "   Попробуй пересобрать машину/образ или добавь preinstall Gradle."
+              exit 1
+            fi
+            gradle --version || true
+            gradle wrapper --gradle-version 8.7
+            echo "✅ Gradle Wrapper создан."
+
+            # Страховка: принудительно пропишем 8.7 в gradle-wrapper.properties
+            WRAPPER_PROP="gradle/wrapper/gradle-wrapper.properties"
+            mkdir -p gradle/wrapper
+            if [ ! -f "$WRAPPER_PROP" ]; then
+              cat > "$WRAPPER_PROP" <<'EOF'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-all.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+EOF
+            else
+              sed -i.bak 's#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-all.zip#g' "$WRAPPER_PROP" || true
+            fi
+          fi
+
+          # 2) Делаем gradlew исполняемым
+          chmod +x ./gradlew
+
+          # 3) Печатаем версии для диагностики
           ./gradlew -v || true
 
-          # Сборка релиза
+          # 4) Собираем релиз
           ./gradlew :app:assembleRelease --info --stacktrace
 
           echo "📁 Дерево app/build/outputs:"
           ls -R app/build/outputs || true
 
-          popd >/dev/null
+          # Возвращаемся в корень
+          cd ..
 
       - name: 🔹 Поиск и копирование APK
         script: |
           set -euo pipefail
-          echo "🔍 Ищем собранные APK..."
-
+          echo "🔍 Ищем собранные APK…"
           mkdir -p build/publish
 
-          # Ищем во всех типичных местах:
-          # - Gradle outputs (android/app/build/outputs/apk/**)
-          # - Flutter outputs (build/app/outputs/**) — на всякий случай
           FOUND_LIST_FILE="$(mktemp)"
+          # Ищем Gradle-артефакты
           ( find android/app/build/outputs/apk -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
+          # На всякий случай — Flutter-артефакты (если есть)
           ( find build/app/outputs            -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
-          ( find build                        -maxdepth 4 -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
+          # Про-запас: любые outputs в пределах build/
+          ( find build -maxdepth 4 -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
 
           sort -u "$FOUND_LIST_FILE" | sed '/^\s*$/d' > "${FOUND_LIST_FILE}.uniq"
 
@@ -63,7 +95,7 @@ workflows:
           echo "✅ Найдены APK:"
           cat "${FOUND_LIST_FILE}.uniq"
 
-          echo "📦 Копируем APK в build/publish ..."
+          echo "📦 Копируем APK в build/publish …"
           while IFS= read -r apk; do
             cp -v "$apk" build/publish/
           done < "${FOUND_LIST_FILE}.uniq"
