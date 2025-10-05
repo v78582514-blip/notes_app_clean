@@ -1,4 +1,4 @@
-package com.example.notice_app   // ← обязательно совпадает с applicationId
+package com.example.notice_app
 
 import android.content.Intent
 import io.flutter.embedding.android.FlutterActivity
@@ -34,4 +34,5 @@ class MainActivity : FlutterActivity() {
                 }
             }
     }
+}
 }
