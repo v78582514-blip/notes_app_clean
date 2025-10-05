@@ -1,5 +1,5 @@
 name: notice_app
-description: Notes app with groups and private mode
+description: Notes app with groups and sharing
 publish_to: "none"
 version: 1.0.0+1
 
@@ -10,7 +10,8 @@ dependencies:
   flutter:
     sdk: flutter
   shared_preferences: ^2.2.3
-  crypto: ^3.0.3
+  share_plus: ^7.2.0
 
 flutter:
   uses-material-design: true
+
