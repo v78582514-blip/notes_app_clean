@@ -5,18 +5,18 @@ plugins {
 }
 
 android {
-    namespace "com.example.notice_app"          // ← Можешь оставить или поменять
+    namespace "com.example.notice_app"          // ← ПОМЕНЯЙ при необходимости
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.example.notice_app"  // ← Совпадает с namespace и пакетом в MainActivity
+        applicationId "com.example.notice_app"  // ← ТОТ ЖЕ пакет
         minSdk 21
         targetSdk 36
         versionCode 1
         versionName "1.0"
     }
 
-    // ВЫРАВНИВАЕМ JVM: и Java, и Kotlin = 17
+    // Выровнять Java/Kotlin на 17
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -29,7 +29,6 @@ android {
         release {
             minifyEnabled false
             shrinkResources false
-            // proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 }
