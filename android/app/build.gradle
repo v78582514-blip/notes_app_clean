@@ -1,22 +1,39 @@
+// android/app/build.gradle  — полный файл
+
 plugins {
     id "com.android.application"
     id "org.jetbrains.kotlin.android"
+    // Плагин Flutter подключается через settings.gradle (includeBuild),
+    // но его id должен быть здесь, чтобы подхватились таски.
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+// Загружаем параметры подписи из android/key.properties
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
-    namespace "com.example.notice_app"          // ← замени на свой package, если другой
+    namespace "com.example.notice_app"          // ← при необходимости замени на свой пакет
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.example.notice_app"  // ← замени на свой package, если другой
-        minSdk 23                                // ✅ ВАЖНО: было 21, ставим 23
+        applicationId "com.example.notice_app"  // ← при необходимости замени на свой пакет
+        minSdk 23                               // Требование Flutter: minSdk ≥ 23
         targetSdk 36
+
         versionCode 1
         versionName "1.0"
+
+        // Для NDK/CMake предупреждений (если не используешь — можно оставить как есть)
+        ndk {
+            debugSymbolLevel "NONE"
+        }
     }
 
-    // Java/Kotlin 17 (исправляет "Inconsistent JVM-target")
+    // Java/Kotlin 17 (исправляет несоответствие JVM target)
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -25,31 +42,37 @@ android {
         jvmTarget = "17"
     }
 
+    // Конфигурация подписи релиза из key.properties
     signingConfigs {
-        // Подпись подключаем, только если секреты заданы в CI
-        if (System.getenv("CM_KEYSTORE") != null || System.getenv("CM_KEYSTORE_PATH") != null) {
-            release {
-                storeFile file(System.getenv("CM_KEYSTORE_PATH") ?: "keystore.jks")
-                storePassword System.getenv("CM_KEYSTORE_PASSWORD") ?: ""
-                keyAlias System.getenv("CM_KEY_ALIAS") ?: ""
-                keyPassword System.getenv("CM_KEY_PASSWORD") ?: ""
+        release {
+            // Если key.properties отсутствует — сборка не упадёт, но релиз будет без подписи.
+            // Для установки на устройство нужен подписанный APK.
+            if (keystorePropertiesFile.exists()) {
+                keyAlias keystoreProperties["keyAlias"]
+                keyPassword keystoreProperties["keyPassword"]
+                storeFile file(keystoreProperties["storeFile"])
+                storePassword keystoreProperties["storePassword"]
             }
         }
     }
 
     buildTypes {
         release {
-            minifyEnabled false
-            shrinkResources false
-            if (signingConfigs.findByName("release") != null) {
+            // Подписываем, только если есть key.properties
+            if (keystorePropertiesFile.exists()) {
                 signingConfig signingConfigs.release
             }
+            // На этапе настройки сборочного конвейера выключим shrink,
+            // чтобы избежать случайных ошибок с ресурсами/обфускацией.
+            minifyEnabled false
+            shrinkResources false
         }
         debug {
             debuggable true
         }
     }
 
+    // Убираем некоторые лишние META-INF из зависимостей
     packagingOptions {
         resources {
             excludes += ["META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/*.kotlin_module"]
@@ -58,6 +81,7 @@ android {
 }
 
 flutter {
+    // путь к корню проекта Flutter
     source "../.."
 }
 
