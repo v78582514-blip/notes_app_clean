@@ -13,7 +13,8 @@ Future<void> main() async {
   runZonedGuarded(() => runApp(const NotesApp()), (e, s) {});
 }
 
-/* ===================== SETTINGS ===================== */
+/* ===================== SETTINGS (theme only) ===================== */
+
 final settings = SettingsStore();
 
 enum AppThemeMode { system, light, dark }
@@ -39,6 +40,7 @@ class SettingsStore extends ChangeNotifier {
 }
 
 /* ===================== MODELS ===================== */
+
 class NoteModel {
   String id;
   String title;
@@ -105,6 +107,7 @@ class GroupModel {
 }
 
 /* ===================== STORAGE ===================== */
+
 class NotesStore extends ChangeNotifier {
   static final NotesStore instance = NotesStore._();
   NotesStore._();
@@ -135,7 +138,7 @@ class NotesStore extends ChangeNotifier {
       }
     }
     if (groups.isEmpty) {
-      final g = GroupModel(id: _gid(), name: 'My notes');
+      final g = GroupModel(id: _gid(), name: 'My Notes');
       groups[g.id] = g;
       await save();
     }
@@ -143,14 +146,8 @@ class NotesStore extends ChangeNotifier {
 
   Future<void> save() async {
     final p = await SharedPreferences.getInstance();
-    await p.setString(
-      _kNotes,
-      jsonEncode(notes.values.map((e) => e.toJson()).toList()),
-    );
-    await p.setString(
-      _kGroups,
-      jsonEncode(groups.values.map((e) => e.toJson()).toList()),
-    );
+    await p.setString(_kNotes, jsonEncode(notes.values.map((e) => e.toJson()).toList()));
+    await p.setString(_kGroups, jsonEncode(groups.values.map((e) => e.toJson()).toList()));
     notifyListeners();
   }
 
@@ -184,7 +181,7 @@ class NotesStore extends ChangeNotifier {
   NoteModel createNote({required String groupId, String title = '', String text = ''}) {
     final n = NoteModel(id: _nid(), title: title, text: text);
     notes[n.id] = n;
-    groups[groupId]?.noteIds = [n.id, ...groups[groupId]!.noteIds];
+    groups[groupId]?.noteIds.insert(0, n.id);
     save();
     return n;
   }
@@ -202,12 +199,6 @@ class NotesStore extends ChangeNotifier {
       notes.remove(id);
     }
     groups.remove(g.id);
-    save();
-  }
-
-  void moveNote(String noteId, String fromGroupId, String toGroupId) {
-    groups[fromGroupId]?.noteIds.remove(noteId);
-    groups[toGroupId]?.noteIds.insert(0, noteId);
     save();
   }
 
@@ -230,14 +221,9 @@ class NotesStore extends ChangeNotifier {
 
   String exportGroup(GroupModel g) {
     final gJson = g.toJson();
-    final noteObjs = g.noteIds
-        .map((id) => notes[id]?.toJson())
-        .whereType<Map<String, dynamic>>()
-        .toList();
-    return jsonEncode({
-      'group': gJson,
-      'notes': noteObjs,
-    });
+    final noteObjs =
+        g.noteIds.map((id) => notes[id]?.toJson()).whereType<Map<String, dynamic>>().toList();
+    return jsonEncode({'group': gJson, 'notes': noteObjs});
   }
 
   GroupModel importGroup(String jsonStr) {
@@ -264,6 +250,7 @@ String _hash(String s) =>
     base64Url.encode(const Utf8Encoder().convert(s)).split('').reversed.join();
 
 /* ===================== APP ===================== */
+
 class NotesApp extends StatefulWidget {
   const NotesApp({super.key});
 
@@ -293,8 +280,8 @@ class _NotesAppState extends State<NotesApp> {
     );
   }
 }
+/* ===================== GROUPS SCREEN ===================== */
 
-/* ===================== SCREENS ===================== */
 class GroupsScreen extends StatefulWidget {
   const GroupsScreen({super.key});
 
@@ -422,6 +409,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
   }
 }
 
+/* ===================== NOTES SCREEN ===================== */
+
 class NotesScreen extends StatefulWidget {
   final String groupId;
   const NotesScreen({super.key, required this.groupId});
@@ -508,7 +497,7 @@ class _NotesScreenState extends State<NotesScreen> {
         padding: const EdgeInsets.only(bottom: 12),
         child: FloatingActionButton.extended(
           onPressed: () {
-            final n = NotesStore.instance.createNote(groupId: g.id, title: '', text: '');
+            final n = NotesStore.instance.createNote(groupId: g.id);
             Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => EditorScreen(noteId: n.id, groupId: g.id)),
             );
@@ -522,7 +511,8 @@ class _NotesScreenState extends State<NotesScreen> {
   }
 }
 
-/* ===================== EDITOR ===================== */
+/* ===================== EDITOR SCREEN ===================== */
+
 class EditorScreen extends StatefulWidget {
   final String noteId;
   final String groupId;
@@ -565,7 +555,6 @@ class _EditorScreenState extends State<EditorScreen> {
 
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
-
     final isModifier =
         HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
     if (isModifier &&
@@ -650,7 +639,7 @@ class _EditorScreenState extends State<EditorScreen> {
         title: Text(n.title.isEmpty ? 'Editor' : n.title),
         actions: [
           IconButton(
-            tooltip: 'Share as plain text',
+            tooltip: 'Share as text',
             onPressed: () =>
                 Share.share(_text.text, subject: _title.text.isEmpty ? 'Note' : _title.text),
             icon: const Icon(Icons.ios_share),
@@ -710,7 +699,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     keyboardType: TextInputType.multiline,
                     decoration: InputDecoration(
                       hintText:
-                          'Note text...\nTip: Ctrl/Cmd + Shift + L toggles smart numbering',
+                          'Note text...\nTip: Ctrl/Cmd + Shift + L toggles numbering',
                       border: const OutlineInputBorder(),
                       contentPadding: const EdgeInsets.all(12),
                       suffixIcon: Column(
@@ -765,6 +754,7 @@ class _EditorScreenState extends State<EditorScreen> {
 }
 
 /* ===================== DIALOG HELPERS ===================== */
+
 Future<String?> _promptText(BuildContext context,
     {required String title, String? hint, String? initial}) async {
   final c = TextEditingController(text: initial ?? '');
@@ -803,7 +793,7 @@ Future<String?> _promptPassword(BuildContext context, String title) async {
   return showDialog<String>(context: context, builder: (cxt) {
     return AlertDialog(
       title: Text(title),
-      content: const TextField(obscureText: true, decoration: InputDecoration(hintText: 'Min 4 chars')),
+      content: TextField(controller: c, obscureText: true, decoration: const InputDecoration(hintText: 'Min 4 chars')),
       actions: [
         TextButton(onPressed: () => Navigator.pop(cxt), child: const Text('Cancel')),
         TextButton(onPressed: () => Navigator.pop(cxt, c.text), child: const Text('OK')),
