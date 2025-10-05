@@ -1,50 +1,61 @@
 plugins {
     id "com.android.application"
     id "kotlin-android"
+    // Flutter Gradle plugin
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+// путь к временному/постоянному keystore
 def keystorePath = file("$rootDir/app/auto-release.jks")
 def hasKeystore = keystorePath.exists()
 
 android {
     namespace "com.example.notice_app"
+
+    // Требуется >= 36 из-за shared_preferences_android
     compileSdk 36
 
     defaultConfig {
         applicationId "com.example.notice_app"
-        minSdk 23
+        minSdk 23        // Flutter >= 3.24 требует минимум 23
         targetSdk 34
         versionCode 1
         versionName "1.0"
         multiDexEnabled true
     }
 
+    // Совместимость с JDK 17 / Kotlin
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
     signingConfigs {
         release {
-            // заполняем конфиг подписи только если файл реально есть
+            // заполняем подпись ТОЛЬКО если файл реально существует
             if (hasKeystore) {
                 storeFile keystorePath
                 storePassword System.getenv("STORE_PASS") ?: ""
-                keyAlias System.getenv("KEY_ALIAS") ?: ""
-                keyPassword System.getenv("KEY_PASS") ?: ""
+                keyAlias      System.getenv("KEY_ALIAS") ?: ""
+                keyPassword   System.getenv("KEY_PASS") ?: ""
             }
         }
     }
 
     buildTypes {
         release {
-            // если keystore есть — подпишем; если нет — просто соберём unsigned
+            // если есть keystore — подпишем; иначе соберём unsigned
             if (hasKeystore) {
                 signingConfig signingConfigs.release
             }
-            // не используем шринк, чтобы проще отлавливать ошибки ресурсов
+            // без shrink, чтобы не ловить ошибки ресурсов при релизе
             minifyEnabled false
             shrinkResources false
         }
-        debug {
-            // отладка как обычно
-        }
+        debug { }
     }
 
     buildFeatures {
@@ -53,17 +64,14 @@ android {
 
     packagingOptions {
         resources.excludes += [
-                'META-INF/LICENSE*',
-                'META-INF/AL2.0',
-                'META-INF/LGPL2.1'
+                "META-INF/LICENSE*",
+                "META-INF/AL2.0",
+                "META-INF/LGPL2.1"
         ]
     }
 }
 
+// НИЧЕГО в dependencies не добавляем — Flutter сам подтянет нужное
+// (блок оставлен пустым намеренно)
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:${libs.versions.kotlin.get()}"
-}
-
-flutter {
-    source "../.."
 }
