@@ -1,32 +1,5 @@
-// ===============================
-// pubspec.yaml (put at project root)
-// ===============================
-/*
-name: notes_app
-publish_to: "none"
-description: Simple notes app with groups, sharing, export/import, private groups
-version: 1.0.0+1
-
-environment:
-  sdk: ">=3.3.0 <4.0.0"
-
-dependencies:
-  flutter:
-    sdk: flutter
-  shared_preferences: ^2.2.3
-  share_plus: ^10.0.2
-  flutter_secure_storage: ^9.2.2
-
-flutter:
-  uses-material-design: true
-*/
-
-// ===============================
-// lib/main.dart (single-file app)
-// ===============================
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -40,7 +13,7 @@ Future<void> main() async {
   runZonedGuarded(() => runApp(const NotesApp()), (e, s) {});
 }
 
-/* ===================== SETTINGS (только тема) ===================== */
+/* ===================== SETTINGS ===================== */
 final settings = SettingsStore();
 
 enum AppThemeMode { system, light, dark }
@@ -104,7 +77,7 @@ class GroupModel {
   String name;
   List<String> noteIds;
   bool isPrivate;
-  String? passwordHash; // stored via secure storage key
+  String? passwordHash;
 
   GroupModel({
     required this.id,
@@ -162,8 +135,7 @@ class NotesStore extends ChangeNotifier {
       }
     }
     if (groups.isEmpty) {
-      // Default group
-      final g = GroupModel(id: _gid(), name: 'Мои заметки');
+      final g = GroupModel(id: _gid(), name: 'My notes');
       groups[g.id] = g;
       await save();
     }
@@ -182,7 +154,6 @@ class NotesStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Password helpers
   Future<void> setGroupPassword(GroupModel g, String password) async {
     final hash = _hash(password);
     g.isPrivate = true;
@@ -203,7 +174,6 @@ class NotesStore extends ChangeNotifier {
     return stored != null && stored == _hash(password);
   }
 
-  // CRUD
   GroupModel createGroup(String name) {
     final g = GroupModel(id: _gid(), name: name);
     groups[g.id] = g;
@@ -241,12 +211,10 @@ class NotesStore extends ChangeNotifier {
     save();
   }
 
-  // Export/Import (JSON strings)
   String exportNote(NoteModel n) => jsonEncode(n.toJson());
 
   NoteModel importNote(String jsonStr, {required String intoGroupId}) {
     final n = NoteModel.fromJson(jsonDecode(jsonStr));
-    // ensure new id to avoid clashes
     final newNote = NoteModel(
       id: _nid(),
       title: n.title,
@@ -262,7 +230,10 @@ class NotesStore extends ChangeNotifier {
 
   String exportGroup(GroupModel g) {
     final gJson = g.toJson();
-    final noteObjs = g.noteIds.map((id) => notes[id]?.toJson()).whereType<Map<String, dynamic>>().toList();
+    final noteObjs = g.noteIds
+        .map((id) => notes[id]?.toJson())
+        .whereType<Map<String, dynamic>>()
+        .toList();
     return jsonEncode({
       'group': gJson,
       'notes': noteObjs,
@@ -289,7 +260,8 @@ class NotesStore extends ChangeNotifier {
 /* ===================== UTIL ===================== */
 String _nid() => 'n_${DateTime.now().microsecondsSinceEpoch}';
 String _gid() => 'g_${DateTime.now().microsecondsSinceEpoch}';
-String _hash(String s) => base64Url.encode(const Utf8Encoder().convert(s)).split('').reversed.join(); // simple reversible obfuscation (demo)
+String _hash(String s) =>
+    base64Url.encode(const Utf8Encoder().convert(s)).split('').reversed.join();
 
 /* ===================== APP ===================== */
 class NotesApp extends StatefulWidget {
@@ -300,22 +272,6 @@ class NotesApp extends StatefulWidget {
 }
 
 class _NotesAppState extends State<NotesApp> {
-  @override
-  void initState() {
-    super.initState();
-    settings.addListener(_onSettings);
-    NotesStore.instance.addListener(_onSettings);
-  }
-
-  @override
-  void dispose() {
-    settings.removeListener(_onSettings);
-    NotesStore.instance.removeListener(_onSettings);
-    super.dispose();
-  }
-
-  void _onSettings() => setState(() {});
-
   @override
   Widget build(BuildContext context) {
     final themeMode = switch (settings.themeMode) {
@@ -328,7 +284,11 @@ class _NotesAppState extends State<NotesApp> {
       title: 'Notes',
       themeMode: themeMode,
       theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
-      darkTheme: ThemeData(useMaterial3: true, brightness: Brightness.dark, colorSchemeSeed: Colors.indigo),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorSchemeSeed: Colors.indigo,
+      ),
       home: const SafeArea(child: GroupsScreen()),
     );
   }
@@ -351,17 +311,15 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Группы заметок'),
+        title: const Text('Groups'),
         actions: [
           PopupMenuButton<String>(
-            tooltip: 'Настройки',
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'theme', child: Text('Тема')),
+            tooltip: 'Settings',
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'theme', child: Text('Theme')),
             ],
             onSelected: (v) async {
-              if (v == 'theme') {
-                await _chooseTheme(context);
-              }
+              if (v == 'theme') await _chooseTheme(context);
             },
           ),
         ],
@@ -374,23 +332,28 @@ class _GroupsScreenState extends State<GroupsScreen> {
           return ListTile(
             leading: Icon(g.isPrivate ? Icons.lock : Icons.folder),
             title: Text(g.name),
-            subtitle: Text('${g.noteIds.length} заметок'),
+            subtitle: Text('${g.noteIds.length} notes'),
             onTap: () async {
               if (g.isPrivate) {
                 final ok = await _askPassword(context, g);
                 if (!ok) return;
               }
               if (!context.mounted) return;
-              Navigator.of(context).push(MaterialPageRoute(builder: (_) => NotesScreen(groupId: g.id)));
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => NotesScreen(groupId: g.id)),
+              );
             },
             trailing: PopupMenuButton<String>(
               onSelected: (v) => _onGroupAction(context, g, v),
               itemBuilder: (context) => [
-                const PopupMenuItem(value: 'rename', child: Text('Переименовать')),
-                PopupMenuItem(value: g.isPrivate ? 'unlock' : 'lock', child: Text(g.isPrivate ? 'Сделать публичной' : 'Сделать приватной')),
-                const PopupMenuItem(value: 'export', child: Text('Экспортировать группу')),
-                const PopupMenuItem(value: 'import', child: Text('Импорт в новую группу')),
-                const PopupMenuItem(value: 'delete', child: Text('Удалить')),
+                const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                PopupMenuItem(
+                  value: g.isPrivate ? 'unlock' : 'lock',
+                  child: Text(g.isPrivate ? 'Make public' : 'Make private'),
+                ),
+                const PopupMenuItem(value: 'export', child: Text('Export group')),
+                const PopupMenuItem(value: 'import', child: Text('Import as new group')),
+                const PopupMenuItem(value: 'delete', child: Text('Delete')),
               ],
             ),
           );
@@ -401,56 +364,58 @@ class _GroupsScreenState extends State<GroupsScreen> {
         padding: const EdgeInsets.only(bottom: 12),
         child: FloatingActionButton.extended(
           onPressed: () async {
-            final name = await _promptText(context, title: 'Новая группа', hint: 'Название группы');
+            final name = await _promptText(context, title: 'New group', hint: 'Group name');
             if (name == null || name.trim().isEmpty) return;
             NotesStore.instance.createGroup(name.trim());
           },
           icon: const Icon(Icons.create_new_folder_outlined),
-          label: const Text('Добавить группу'),
+          label: const Text('Add group'),
         ),
       ),
-      bottomNavigationBar: const SizedBox(height: 56), // чтобы FAB не перекрывался
+      bottomNavigationBar: const SizedBox(height: 56),
     );
   }
 
   Future<void> _onGroupAction(BuildContext context, GroupModel g, String v) async {
     switch (v) {
       case 'rename':
-        final name = await _promptText(context, title: 'Переименовать группу', initial: g.name);
+        final name = await _promptText(context, title: 'Rename group', initial: g.name);
         if (name != null && name.trim().isNotEmpty) {
           g.name = name.trim();
           await NotesStore.instance.save();
         }
         break;
       case 'lock':
-        final pass = await _promptPassword(context, 'Пароль для приватной группы');
+        final pass = await _promptPassword(context, 'Password for private group');
         if (pass != null && pass.length >= 4) {
           await NotesStore.instance.setGroupPassword(g, pass);
           if (!context.mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Группа сделана приватной')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('Group set to private')));
         }
         break;
       case 'unlock':
         await NotesStore.instance.clearGroupPassword(g);
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Группа сделана публичной')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Group set to public')));
         break;
       case 'export':
         final jsonStr = NotesStore.instance.exportGroup(g);
-        await Share.share(jsonStr, subject: 'Экспорт группы: ${g.name}');
+        await Share.share(jsonStr, subject: 'Export group: ${g.name}');
         break;
       case 'import':
         final pasted = await _promptMultiline(context,
-            title: 'Вставьте JSON группы', hint: '{"group": {...}, "notes": [...]}');
+            title: 'Paste group JSON', hint: '{"group": {...}, "notes": [...]}');
         if (pasted != null && pasted.trim().isNotEmpty) {
           final newG = NotesStore.instance.importGroup(pasted.trim());
           if (!context.mounted) return;
           ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text('Импорт завершён: ${newG.name}')));
+              .showSnackBar(SnackBar(content: Text('Imported: ${newG.name}')));
         }
         break;
       case 'delete':
-        final ok = await _confirm(context, 'Удалить группу «${g.name}» и все заметки?');
+        final ok = await _confirm(context, 'Delete group “${g.name}” and all notes?');
         if (ok) NotesStore.instance.deleteGroup(g);
         break;
     }
@@ -477,9 +442,13 @@ class _NotesScreenState extends State<NotesScreen> {
         title: Text(g.name),
         actions: [
           IconButton(
-            tooltip: 'Импорт заметки',
+            tooltip: 'Import note',
             onPressed: () async {
-              final pasted = await _promptMultiline(context, title: 'Импорт заметки (JSON)', hint: '{"id":...,"title":...,"text":...}');
+              final pasted = await _promptMultiline(
+                context,
+                title: 'Import note (JSON)',
+                hint: '{"id":...,"title":...,"text":...}',
+              );
               if (pasted != null && pasted.trim().isNotEmpty) {
                 NotesStore.instance.importNote(pasted.trim(), intoGroupId: g.id);
               }
@@ -493,32 +462,40 @@ class _NotesScreenState extends State<NotesScreen> {
         itemBuilder: (c, i) {
           final n = store.notes[noteIds[i]]!;
           return ListTile(
-            title: Text(n.title.isEmpty ? 'Без названия' : n.title),
+            title: Text(n.title.isEmpty ? 'Untitled' : n.title),
             subtitle: Text(
               n.text.replaceAll('\n', ' ').trim(),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => EditorScreen(noteId: n.id, groupId: g.id))),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => EditorScreen(noteId: n.id, groupId: g.id)),
+            ),
             trailing: PopupMenuButton<String>(
               onSelected: (v) async {
                 switch (v) {
                   case 'share':
-                    await Share.share(n.text, subject: n.title.isEmpty ? 'Заметка' : n.title);
+                    await Share.share(n.text, subject: n.title.isEmpty ? 'Note' : n.title);
                     break;
                   case 'export':
-                    await Share.share(NotesStore.instance.exportNote(n), subject: 'Экспорт заметки: ${n.title}');
+                    await Share.share(
+                      NotesStore.instance.exportNote(n),
+                      subject: 'Export note: ${n.title}',
+                    );
                     break;
                   case 'delete':
-                    final ok = await _confirm(context, 'Удалить заметку «${n.title.isEmpty ? 'Без названия' : n.title}»?');
+                    final ok = await _confirm(
+                      context,
+                      'Delete note “${n.title.isEmpty ? 'Untitled' : n.title}”?',
+                    );
                     if (ok) NotesStore.instance.deleteNote(n);
                     break;
                 }
               },
               itemBuilder: (c) => const [
-                PopupMenuItem(value: 'share', child: Text('Поделиться (текст как есть)')),
-                PopupMenuItem(value: 'export', child: Text('Экспорт (JSON)')),
-                PopupMenuItem(value: 'delete', child: Text('Удалить')),
+                PopupMenuItem(value: 'share', child: Text('Share (plain text)')),
+                PopupMenuItem(value: 'export', child: Text('Export (JSON)')),
+                PopupMenuItem(value: 'delete', child: Text('Delete')),
               ],
             ),
           );
@@ -532,10 +509,12 @@ class _NotesScreenState extends State<NotesScreen> {
         child: FloatingActionButton.extended(
           onPressed: () {
             final n = NotesStore.instance.createNote(groupId: g.id, title: '', text: '');
-            Navigator.of(context).push(MaterialPageRoute(builder: (_) => EditorScreen(noteId: n.id, groupId: g.id)));
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => EditorScreen(noteId: n.id, groupId: g.id)),
+            );
           },
           icon: const Icon(Icons.note_add_outlined),
-          label: const Text('Новая заметка'),
+          label: const Text('New note'),
         ),
       ),
       bottomNavigationBar: const SizedBox(height: 56),
@@ -556,7 +535,7 @@ class EditorScreen extends StatefulWidget {
 class _EditorScreenState extends State<EditorScreen> {
   late TextEditingController _title;
   late TextEditingController _text;
-  bool numbering = false; // умная нумерация
+  bool numbering = false;
 
   @override
   void initState() {
@@ -564,7 +543,6 @@ class _EditorScreenState extends State<EditorScreen> {
     final n = NotesStore.instance.notes[widget.noteId]!;
     _title = TextEditingController(text: n.title);
     _text = TextEditingController(text: n.text);
-
     _text.addListener(_onChanged);
   }
 
@@ -585,15 +563,15 @@ class _EditorScreenState extends State<EditorScreen> {
     store.save();
   }
 
-  // Вставка следующего номера при Enter
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
-    // Шорткаты: Ctrl/Cmd + Shift + L — переключить нумерацию
-    final isModifier = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
-    if (isModifier && HardwareKeyboard.instance.isShiftPressed && event.logicalKey == LogicalKeyboardKey.keyL) {
+    final isModifier =
+        HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
+    if (isModifier &&
+        HardwareKeyboard.instance.isShiftPressed &&
+        event.logicalKey == LogicalKeyboardKey.keyL) {
       setState(() => numbering = !numbering);
-      // Автовставка "1. " если включили и курсор в начале строки
       _ensureFirstNumber();
       return KeyEventResult.handled;
     }
@@ -635,7 +613,6 @@ class _EditorScreenState extends State<EditorScreen> {
         selection: TextSelection.collapsed(offset: idx + insert.length),
       );
     } else {
-      // если предыдущая строка пустая — вставляем "1. "
       final insert = '\n1. ';
       _text.value = _text.value.copyWith(
         text: text.replaceRange(idx, idx, insert),
@@ -644,7 +621,6 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
-  // utils for editor
   int _lineStartIndex(String text, int pos) {
     final prev = text.lastIndexOf('\n', pos - 1);
     return prev == -1 ? 0 : prev + 1;
@@ -671,15 +647,16 @@ class _EditorScreenState extends State<EditorScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(n.title.isEmpty ? 'Редактор' : n.title),
+        title: Text(n.title.isEmpty ? 'Editor' : n.title),
         actions: [
           IconButton(
-            tooltip: 'Поделиться текстом (как есть)',
-            onPressed: () => Share.share(_text.text, subject: _title.text.isEmpty ? 'Заметка' : _title.text),
+            tooltip: 'Share as plain text',
+            onPressed: () =>
+                Share.share(_text.text, subject: _title.text.isEmpty ? 'Note' : _title.text),
             icon: const Icon(Icons.ios_share),
           ),
           PopupMenuButton<String>(
-            tooltip: 'Ещё',
+            tooltip: 'More',
             onSelected: (v) async {
               switch (v) {
                 case 'toggle_numbering':
@@ -690,16 +667,21 @@ class _EditorScreenState extends State<EditorScreen> {
                   final jsonStr = NotesStore.instance.exportNote(n);
                   await Clipboard.setData(ClipboardData(text: jsonStr));
                   if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('JSON скопирован в буфер')));
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(const SnackBar(content: Text('JSON copied')));
                   break;
               }
             },
             itemBuilder: (c) => [
               PopupMenuItem(
                 value: 'toggle_numbering',
-                child: Row(children: [Icon(numbering ? Icons.format_list_numbered_rtl : Icons.format_list_numbered), const SizedBox(width: 8), const Text('Нумерация (умная)')]),
+                child: Row(children: [
+                  Icon(numbering ? Icons.format_list_numbered_rtl : Icons.format_list_numbered),
+                  const SizedBox(width: 8),
+                  const Text('Smart numbering'),
+                ]),
               ),
-              const PopupMenuItem(value: 'copy_json', child: Text('Скопировать JSON заметки')),
+              const PopupMenuItem(value: 'copy_json', child: Text('Copy note JSON')),
             ],
           )
         ],
@@ -713,7 +695,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 controller: _title,
                 textInputAction: TextInputAction.next,
                 decoration: const InputDecoration(
-                  hintText: 'Заголовок',
+                  hintText: 'Title',
                   border: OutlineInputBorder(),
                   contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 ),
@@ -727,7 +709,8 @@ class _EditorScreenState extends State<EditorScreen> {
                     maxLines: null,
                     keyboardType: TextInputType.multiline,
                     decoration: InputDecoration(
-                      hintText: 'Текст заметки...\nСовет: Ctrl/Cmd + Shift + L — включить/выключить умную нумерацию',
+                      hintText:
+                          'Note text...\nTip: Ctrl/Cmd + Shift + L toggles smart numbering',
                       border: const OutlineInputBorder(),
                       contentPadding: const EdgeInsets.all(12),
                       suffixIcon: Column(
@@ -746,7 +729,6 @@ class _EditorScreenState extends State<EditorScreen> {
           ),
         ),
       ),
-      // Удобные кнопки в нижней панели — не перекрываются системной панелью
       bottomNavigationBar: SafeArea(
         top: false,
         child: Padding(
@@ -760,7 +742,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     setState(_ensureFirstNumber);
                   },
                   icon: const Icon(Icons.format_list_numbered),
-                  label: Text(numbering ? 'Нумерация: ВКЛ' : 'Нумерация: ВЫКЛ'),
+                  label: Text(numbering ? 'Numbering: ON' : 'Numbering: OFF'),
                 ),
               ),
               const SizedBox(width: 8),
@@ -768,10 +750,10 @@ class _EditorScreenState extends State<EditorScreen> {
                 child: OutlinedButton.icon(
                   onPressed: () async {
                     final jsonStr = NotesStore.instance.exportNote(n);
-                    await Share.share(jsonStr, subject: 'Экспорт заметки: ${_title.text}');
+                    await Share.share(jsonStr, subject: 'Export note: ${_title.text}');
                   },
                   icon: const Icon(Icons.file_upload),
-                  label: const Text('Экспорт JSON'),
+                  label: const Text('Export JSON'),
                 ),
               ),
             ],
@@ -783,27 +765,35 @@ class _EditorScreenState extends State<EditorScreen> {
 }
 
 /* ===================== DIALOG HELPERS ===================== */
-Future<String?> _promptText(BuildContext context, {required String title, String? hint, String? initial}) async {
+Future<String?> _promptText(BuildContext context,
+    {required String title, String? hint, String? initial}) async {
   final c = TextEditingController(text: initial ?? '');
   return showDialog<String>(context: context, builder: (cxt) {
     return AlertDialog(
       title: Text(title),
-      content: TextField(controller: c, autofocus: true, decoration: InputDecoration(hintText: hint ?? '')), 
-      actions: [TextButton(onPressed: () => Navigator.pop(cxt), child: const Text('Отмена')), TextButton(onPressed: () => Navigator.pop(cxt, c.text), child: const Text('OK'))],
+      content: TextField(controller: c, autofocus: true, decoration: InputDecoration(hintText: hint ?? '')),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(cxt), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(cxt, c.text), child: const Text('OK')),
+      ],
     );
   });
 }
 
-Future<String?> _promptMultiline(BuildContext context, {required String title, String? hint}) async {
+Future<String?> _promptMultiline(BuildContext context,
+    {required String title, String? hint}) async {
   final c = TextEditingController();
   return showDialog<String>(context: context, builder: (cxt) {
     return AlertDialog(
       title: Text(title),
       content: SizedBox(
         width: 520,
-        child: TextField(controller: c, autofocus: true, maxLines: 8, decoration: InputDecoration(hintText: hint ?? '')), 
+        child: TextField(controller: c, autofocus: true, maxLines: 8, decoration: InputDecoration(hintText: hint ?? '')),
       ),
-      actions: [TextButton(onPressed: () => Navigator.pop(cxt), child: const Text('Отмена')), TextButton(onPressed: () => Navigator.pop(cxt, c.text), child: const Text('OK'))],
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(cxt), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(cxt, c.text), child: const Text('OK')),
+      ],
     );
   });
 }
@@ -813,8 +803,11 @@ Future<String?> _promptPassword(BuildContext context, String title) async {
   return showDialog<String>(context: context, builder: (cxt) {
     return AlertDialog(
       title: Text(title),
-      content: TextField(controller: c, autofocus: true, obscureText: true, decoration: const InputDecoration(hintText: 'Минимум 4 символа')), 
-      actions: [TextButton(onPressed: () => Navigator.pop(cxt), child: const Text('Отмена')), TextButton(onPressed: () => Navigator.pop(cxt, c.text), child: const Text('OK'))],
+      content: const TextField(obscureText: true, decoration: InputDecoration(hintText: 'Min 4 chars')),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(cxt), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(cxt, c.text), child: const Text('OK')),
+      ],
     );
   });
 }
@@ -824,8 +817,8 @@ Future<bool> _confirm(BuildContext context, String title) async {
     return AlertDialog(
       title: Text(title),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(cxt, false), child: const Text('Отмена')),
-        FilledButton(onPressed: () => Navigator.pop(cxt, true), child: const Text('Удалить')),
+        TextButton(onPressed: () => Navigator.pop(cxt, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(cxt, true), child: const Text('Delete')),
       ],
     );
   });
@@ -833,12 +826,11 @@ Future<bool> _confirm(BuildContext context, String title) async {
 }
 
 Future<bool> _askPassword(BuildContext context, GroupModel g) async {
-  final pass = await _promptPassword(context, 'Введите пароль для «${g.name}»');
+  final pass = await _promptPassword(context, 'Enter password for “${g.name}”');
   if (pass == null) return false;
   final ok = await NotesStore.instance.checkGroupPassword(g, pass);
   if (!ok && context.mounted) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Неверный пароль')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Wrong password')));
   }
   return ok;
 }
@@ -846,10 +838,10 @@ Future<bool> _askPassword(BuildContext context, GroupModel g) async {
 Future<void> _chooseTheme(BuildContext context) async {
   final m = settings.themeMode;
   final selected = await showDialog<AppThemeMode>(context: context, builder: (cxt) {
-    return SimpleDialog(title: const Text('Тема'), children: [
-      RadioListTile<AppThemeMode>(value: AppThemeMode.system, groupValue: m, onChanged: (v) => Navigator.pop(cxt, v), title: const Text('Системная')),
-      RadioListTile<AppThemeMode>(value: AppThemeMode.light, groupValue: m, onChanged: (v) => Navigator.pop(cxt, v), title: const Text('Светлая')),
-      RadioListTile<AppThemeMode>(value: AppThemeMode.dark, groupValue: m, onChanged: (v) => Navigator.pop(cxt, v), title: const Text('Тёмная')),
+    return SimpleDialog(title: const Text('Theme'), children: [
+      RadioListTile<AppThemeMode>(value: AppThemeMode.system, groupValue: m, onChanged: (v) => Navigator.pop(cxt, v), title: const Text('System')),
+      RadioListTile<AppThemeMode>(value: AppThemeMode.light, groupValue: m, onChanged: (v) => Navigator.pop(cxt, v), title: const Text('Light')),
+      RadioListTile<AppThemeMode>(value: AppThemeMode.dark, groupValue: m, onChanged: (v) => Navigator.pop(cxt, v), title: const Text('Dark')),
     ]);
   });
   if (selected != null) settings.setTheme(selected);
