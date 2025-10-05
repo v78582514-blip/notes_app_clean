@@ -1,90 +1,62 @@
-name: Build & Sign APK (auto-keystore)
+name: 📦 Build Android APK
 
 on:
   push:
-    branches: [ "main", "master", "notes_app_clean" ]
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     env:
-      CI: true
-      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false"
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+      JAVA_VERSION: "17"
+      KEY_ALIAS: "androiddebugkey"
+      KEY_PASS: "android"
+      STORE_PASS: "android"
+      KEYSTORE_FILE: "android/app/auto-release.jks"
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      # 1️⃣ Клонируем проект
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v3
 
-      - name: Setup Flutter
+      # 2️⃣ Устанавливаем Flutter
+      - name: 🧱 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
-          cache: true
+          flutter-version: '3.24.0'
 
-      - name: Flutter pub get
+      # 3️⃣ Генерируем тестовый keystore
+      - name: 🔐 Generate keystore
         run: |
-          flutter clean
-          flutter pub get
-
-      - name: Build release APK (unsigned)
-        run: |
-          flutter build apk --release --no-tree-shake-icons
-          ls -R build/app/outputs || true
-
-      # 👉 ГЕНЕРИМ КЕЙСТОР ПРЯМО В CI (без сторонних сайтов и ПК)
-      - name: Generate temporary keystore
-        run: |
-          mkdir -p android/app
           keytool -genkeypair \
-            -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -keystore android/app/auto-release.jks \
-            -storepass android \
-            -keypass android \
-            -dname "CN=NoticeApp,O=CI,L=Internet,ST=NA,C=US"
-          echo "✅ Keystore created: android/app/auto-release.jks"
+            -v \
+            -keystore $KEYSTORE_FILE \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -alias $KEY_ALIAS \
+            -storepass $STORE_PASS \
+            -keypass $KEY_PASS \
+            -dname "CN=GitHub, OU=CI, O=NoticeApp, L=Internet, S=Web, C=US"
 
-      # 👉 ПОДПИСЫВАЕМ APK (zipalign + apksigner)
-      - name: Sign APK
-        run: |
-          set -euo pipefail
-          APK_IN="build/app/outputs/flutter-apk/app-release.apk"
-          if [ ! -f "$APK_IN" ]; then
-            echo "❌ Not found: $APK_IN"
-            exit 1
-          fi
-          SDK_DIR="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
-          BT_DIR=$(ls -d "$SDK_DIR/build-tools/"* | sort -V | tail -1)
-          ZIPALIGN="$BT_DIR/zipalign"
-          APKSIGNER="$BT_DIR/apksigner"
+      # 4️⃣ Устанавливаем зависимости
+      - name: 📦 Install dependencies
+        run: flutter pub get
 
-          mkdir -p artifacts
-          ALIGNED="artifacts/app-release-aligned.apk"
-          SIGNED="artifacts/app-release-signed.apk"
+      # 5️⃣ Очищаем проект
+      - name: 🧹 Clean project
+        run: flutter clean
 
-          "$ZIPALIGN" -v -p 4 "$APK_IN" "$ALIGNED"
-          "$APKSIGNER" sign \
-            --ks android/app/auto-release.jks \
-            --ks-key-alias androiddebugkey \
-            --ks-pass pass:android \
-            --key-pass pass:android \
-            --out "$SIGNED" \
-            "$ALIGNED"
+      # 6️⃣ Создаем релизный APK
+      - name: 🏗️ Build release APK
+        run: flutter build apk --release
 
-          "$APKSIGNER" verify --verbose "$SIGNED"
-          echo "✅ Signed APK: $SIGNED"
-
-      # 👉 Сохраняем keystore как артефакт, чтобы потом можно было добавить в Secrets и переиспользовать
-      - name: Upload keystore artifact (save for future use)
-        uses: actions/upload-artifact@v4
-        with:
-          name: auto-release-keystore
-          path: android/app/auto-release.jks
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      # 7️⃣ Загружаем APK как артефакт
+      - name: 📤 Upload APK
+        uses: actions/upload-artifact@v3
         with:
           name: notice_app_apk
-          path: artifacts/app-release-signed.apk
-          if-no-files-found: error
+          path: build/app/outputs/flutter-apk/app-release.apk
