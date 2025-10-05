@@ -1,17 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
-    <!-- Тема для стартового Activity (splash), без ActionBar -->
+    <!-- Тема для экрана запуска (activity до инициализации Flutter) -->
     <style name="LaunchTheme" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Цвет фона окна на старте -->
-        <item name="android:windowBackground">@android:color/white</item>
-        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">false</item>
     </style>
 
     <!-- Основная тема приложения -->
     <style name="NormalTheme" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
-        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">?android:colorBackground</item>
     </style>
-
 </resources>
