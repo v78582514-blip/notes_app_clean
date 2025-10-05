@@ -9,56 +9,71 @@ workflows:
     scripts:
       - name: 🔹 Подготовка проекта
         script: |
-          set -e
+          set -euo pipefail
           echo "🧹 Очистка и установка зависимостей..."
           flutter clean
           flutter pub get
 
-      - name: 🔹 Сборка релизного APK
+      - name: 🔹 Сборка релизного APK (напрямую через Gradle)
         script: |
-          set -e
-          echo "🏗️ Собираем именно APK, а не AAB..."
+          set -euo pipefail
+          echo "🏗️ Собираем release через Gradle (без flutter build apk)…"
           BN=$(date +%s)
-          flutter build apk --release \
-            --no-tree-shake-icons \
-            --build-number="$BN" \
-            --build-name="1.0.$BN" \
-            --target-platform android-arm,android-arm64,android-x64
-          echo "✅ Проверим, где появился APK:"
-          find build -type f -name "*.apk"
+          # Обновим версию для Android (Gradle использует ее из local.properties? — нет.
+          # Поэтому Flutter-номер версии не обязателен. Главное — собрать assembleRelease)
+          pushd android >/dev/null
+
+          # Печатаем версии Gradle/Java для диагностики
+          ./gradlew -v || true
+
+          # Сборка релиза
+          ./gradlew :app:assembleRelease --info --stacktrace
+
+          echo "📁 Дерево app/build/outputs:"
+          ls -R app/build/outputs || true
+
+          popd >/dev/null
 
       - name: 🔹 Поиск и копирование APK
         script: |
-          set -e
+          set -euo pipefail
           echo "🔍 Ищем собранные APK..."
-          ls -R build || true
 
           mkdir -p build/publish
 
-          APK_PATH=$(find build -type f -name "*release*.apk" -print -quit)
+          # Ищем во всех типичных местах:
+          # - Gradle outputs (android/app/build/outputs/apk/**)
+          # - Flutter outputs (build/app/outputs/**) — на всякий случай
+          FOUND_LIST_FILE="$(mktemp)"
+          ( find android/app/build/outputs/apk -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
+          ( find build/app/outputs            -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
+          ( find build                        -maxdepth 4 -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
 
-          if [ -z "$APK_PATH" ]; then
-            echo "❌ Не найдено ни одного APK-файла. Проверим build/app/outputs:"
+          sort -u "$FOUND_LIST_FILE" | sed '/^\s*$/d' > "${FOUND_LIST_FILE}.uniq"
+
+          if [ ! -s "${FOUND_LIST_FILE}.uniq" ]; then
+            echo "❌ Не найдено ни одного release APK."
+            echo "🔎 Отладка: android/app/build/outputs содержимое:"
+            ls -R android/app/build/outputs || true
+            echo "🔎 Отладка: build/app/outputs содержимое:"
             ls -R build/app/outputs || true
-            echo "⚠️ Попробуем собрать вручную через Gradle..."
-            cd android
-            ./gradlew assembleRelease --stacktrace || true
-            cd ..
-            APK_PATH=$(find build -type f -name "*release*.apk" -print -quit)
-          fi
-
-          if [ -z "$APK_PATH" ]; then
-            echo "🚨 Ошибка: APK не найден после всех попыток."
             exit 1
           fi
 
-          echo "✅ Найден APK: $APK_PATH"
-          cp -v "$APK_PATH" build/publish/
+          echo "✅ Найдены APK:"
+          cat "${FOUND_LIST_FILE}.uniq"
 
-          echo "🎉 Файл успешно скопирован в build/publish"
+          echo "📦 Копируем APK в build/publish ..."
+          while IFS= read -r apk; do
+            cp -v "$apk" build/publish/
+          done < "${FOUND_LIST_FILE}.uniq"
+
+          echo "🎉 Готово. В build/publish лежат:"
+          ls -l build/publish
 
     artifacts:
       - build/publish/*.apk
+      - android/app/build/outputs/apk/**/*.apk
       - build/app/outputs/**/*.apk
       - build/**/outputs/**/*.apk
 
