@@ -74,4 +74,6 @@ android {
 // НИЧЕГО в dependencies не добавляем — Flutter сам подтянет нужное
 // (блок оставлен пустым намеренно)
 dependencies {
+    // даёт стили Theme.Material3.*
+    implementation "com.google.android.material:material:1.12.0"
 }
