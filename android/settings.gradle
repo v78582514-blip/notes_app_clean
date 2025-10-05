@@ -1,21 +1,38 @@
 pluginManagement {
+    // Путь к Flutter SDK читаем из local.properties
+    def flutterSdkPath = {
+        def properties = new Properties()
+        def localPropertiesFile = new File(settingsDir, "local.properties")
+        if (localPropertiesFile.exists()) {
+            localPropertiesFile.withReader("UTF-8") { reader -> properties.load(reader) }
+        }
+        def path = properties.getProperty("flutter.sdk")
+        assert path != null : "flutter.sdk not set in local.properties"
+        return path
+    }()
+
+    // ВАЖНО: подключаем gradle-скрипты Flutter (даёт плагин dev.flutter.flutter-plugin-loader)
+    includeBuild("${flutterSdkPath}/packages/flutter_tools/gradle")
+
     repositories {
         google()
         mavenCentral()
         gradlePluginPortal()
     }
+
+    // Здесь задаём версии AGP и Kotlin (можно оставить как ниже)
     plugins {
-        id "com.android.application" version "8.6.0"
-        id "org.jetbrains.kotlin.android" version "2.1.0"
-        // Flutter Gradle plugin берём с портала
-        id "dev.flutter.flutter-gradle-plugin" version "1.0.0" apply false
+        id "com.android.application" version "8.6.0" apply false
+        id "org.jetbrains.kotlin.android" version "2.1.0" apply false
     }
 }
 
 plugins {
+    // Сам загрузчик Flutter-плагинов — без него и была ошибка
     id "dev.flutter.flutter-plugin-loader" version "1.0.0"
+
     id "com.android.application" apply false
     id "org.jetbrains.kotlin.android" apply false
 }
 
-include ":app"
+include(":app")
