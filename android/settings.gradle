@@ -5,7 +5,7 @@ pluginManagement {
         gradlePluginPortal()
     }
 
-    // Подхватываем Flutter Gradle плагин из SDK
+    // подключаем Flutter gradle-плагин из SDK
     def flutterSdkPath = {
         def props = new Properties()
         def localProps = new File(rootProject.projectDir, "local.properties")
@@ -13,7 +13,7 @@ pluginManagement {
             localProps.withReader("UTF-8") { reader -> props.load(reader) }
         }
         def sdkPath = props.getProperty("flutter.sdk")
-        assert sdkPath != null : "flutter.sdk не найден в local.properties. Запусти любую flutter-команду, чтобы он появился."
+        assert sdkPath != null : "flutter.sdk не найден в local.properties"
         return sdkPath
     }()
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
@@ -21,9 +21,8 @@ pluginManagement {
 
 plugins {
     id "dev.flutter.flutter-plugin-loader" version "1.0.0"
-    id "com.android.application" version "8.2.2" apply false
-    id "org.jetbrains.kotlin.android" version "1.9.22" apply false
+    id "com.android.application" version "8.4.2" apply false
+    id "org.jetbrains.kotlin.android" version "1.9.24" apply false
 }
 
 include(":app")
-
