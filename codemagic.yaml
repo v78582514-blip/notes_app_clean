@@ -14,57 +14,29 @@ workflows:
           flutter clean
           flutter pub get
 
-      - name: 🔹 Сборка релизного APK (через Gradle с автогенерацией wrapper)
+      - name: 🔹 Сборка релизного APK (через Gradle)
         script: |
           set -euo pipefail
-          echo "🏗️ Собираем release через Gradle…"
-          BN=$(date +%s)
-
-          # Переходим в android/
+          echo "🏗️ Сборка release через Gradle…"
           cd android
 
-          # 1) Если gradlew отсутствует — генерируем wrapper
           if [ ! -f "./gradlew" ]; then
             echo "⚠️ gradlew не найден. Генерируем Gradle Wrapper…"
-            # Проверим наличие системного gradle и сгенерируем wrapper нужной версии
             if ! command -v gradle >/dev/null 2>&1; then
               echo "❌ В окружении нет 'gradle'. Это нетипично для Codemagic."
-              echo "   Попробуй пересобрать машину/образ или добавь preinstall Gradle."
               exit 1
             fi
-            gradle --version || true
             gradle wrapper --gradle-version 8.7
-            echo "✅ Gradle Wrapper создан."
-
-            # Страховка: принудительно пропишем 8.7 в gradle-wrapper.properties
-            WRAPPER_PROP="gradle/wrapper/gradle-wrapper.properties"
-            mkdir -p gradle/wrapper
-            if [ ! -f "$WRAPPER_PROP" ]; then
-              cat > "$WRAPPER_PROP" <<'EOF'
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-all.zip
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
-EOF
-            else
-              sed -i.bak 's#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-all.zip#g' "$WRAPPER_PROP" || true
-            fi
           fi
 
-          # 2) Делаем gradlew исполняемым
           chmod +x ./gradlew
-
-          # 3) Печатаем версии для диагностики
           ./gradlew -v || true
 
-          # 4) Собираем релиз
+          # Основная сборка
           ./gradlew :app:assembleRelease --info --stacktrace
 
-          echo "📁 Дерево app/build/outputs:"
+          echo "📁 Дерево outputs:"
           ls -R app/build/outputs || true
-
-          # Возвращаемся в корень
           cd ..
 
       - name: 🔹 Поиск и копирование APK
@@ -74,20 +46,17 @@ EOF
           mkdir -p build/publish
 
           FOUND_LIST_FILE="$(mktemp)"
-          # Ищем Gradle-артефакты
           ( find android/app/build/outputs/apk -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
-          # На всякий случай — Flutter-артефакты (если есть)
           ( find build/app/outputs            -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
-          # Про-запас: любые outputs в пределах build/
-          ( find build -maxdepth 4 -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
+          ( find build                        -maxdepth 4 -type f -name "*release*.apk" -print 2>/dev/null || true ) >> "$FOUND_LIST_FILE"
 
           sort -u "$FOUND_LIST_FILE" | sed '/^\s*$/d' > "${FOUND_LIST_FILE}.uniq"
 
           if [ ! -s "${FOUND_LIST_FILE}.uniq" ]; then
             echo "❌ Не найдено ни одного release APK."
-            echo "🔎 Отладка: android/app/build/outputs содержимое:"
+            echo "🔎 android/app/build/outputs:"
             ls -R android/app/build/outputs || true
-            echo "🔎 Отладка: build/app/outputs содержимое:"
+            echo "🔎 build/app/outputs:"
             ls -R build/app/outputs || true
             exit 1
           fi
