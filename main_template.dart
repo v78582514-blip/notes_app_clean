@@ -92,7 +92,7 @@ class Note {
   DateTime updatedAt;
   int? colorHex;
   String? groupId;
-  bool numbered; // ⬅ локальная нумерация
+  bool numbered; // локальная нумерация
 
   Note({
     required this.id,
@@ -114,7 +114,6 @@ class Note {
     );
   }
 
-  /// Чтобы явно поменять/сбросить groupId, установите [setGroupId: true].
   Note copyWith({
     String? text,
     DateTime? updatedAt,
@@ -122,7 +121,7 @@ class Note {
     bool keepNullColor = false,
     String? groupId,
     bool setGroupId = false,
-    bool? numbered, // ⬅ управление локальной нумерацией
+    bool? numbered,
   }) =>
       Note(
         id: id,
@@ -184,7 +183,7 @@ class Group {
 /* ===================== STORE ===================== */
 
 class NotesStore extends ChangeNotifier {
-  static const _prefsKey = 'notes_v3_grid_groups_local_numbering';
+  static const _prefsKey = 'notes_v4_grid_groups_local_numbering_inline';
   final List<Note> _notes = [];
   final List<Group> _groups = [];
   bool _loaded = false;
@@ -720,12 +719,12 @@ class _NoteCardGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = note.colorHex != null ? Color(note.colorHex!) : null;
     final updated = _formatDate(note.updatedAt);
-    final textPreview = _formatPreview(note.text, numbered: note.numbered);
 
     final card = Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
+        // копирование текста — двойной тап
         onDoubleTap: () async {
           await Clipboard.setData(ClipboardData(text: note.text));
           if (context.mounted) {
@@ -738,7 +737,8 @@ class _NoteCardGrid extends StatelessWidget {
             Row(
               children: [
                 Container(
-                  width: 14, height: 14,
+                  width: 14,
+                  height: 14,
                   decoration: BoxDecoration(
                     color: color ?? Colors.transparent,
                     shape: BoxShape.circle,
@@ -758,7 +758,7 @@ class _NoteCardGrid extends StatelessWidget {
             const SizedBox(height: 8),
             Expanded(
               child: Text(
-                textPreview,
+                _restText(note.text),
                 maxLines: 6,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -886,23 +886,62 @@ class NoteEditor extends StatefulWidget {
 
 class _NoteEditorState extends State<NoteEditor> {
   late final TextEditingController _ctrl;
+  TextEditingValue _lastValue = const TextEditingValue(text: '');
+  bool _internalEdit = false; // защита от рекурсии
   Color? _selectedColor;
   bool _detachFromGroup = false;
-  bool _numbered = false; // локальный переключатель
+  bool _numbered = false;
 
   @override
   void initState() {
     super.initState();
     _ctrl = TextEditingController(text: widget.note?.text ?? '');
+    _lastValue = _ctrl.value;
     _selectedColor = widget.note?.colorHex != null ? Color(widget.note!.colorHex!) : null;
     _numbered = widget.note?.numbered ?? false;
-    _ctrl.addListener(() => setState(() {})); // обновлять предпросмотр
+    _ctrl.addListener(_handleTextChanged);
   }
 
   @override
   void dispose() {
+    _ctrl.removeListener(_handleTextChanged);
     _ctrl.dispose();
     super.dispose();
+  }
+
+  void _handleTextChanged() {
+    if (_internalEdit || !_numbered) {
+      _lastValue = _ctrl.value;
+      return;
+    }
+    final now = _ctrl.value;
+    // Проверим «вставку одной новой строки»
+    final old = _lastValue;
+    if (now.text.length == old.text.length + 1 &&
+        now.selection.baseOffset == old.selection.baseOffset + 1 &&
+        now.text.substring(0, now.selection.baseOffset).endsWith('\n')) {
+      // caret после только что вставленного \n
+      final caret = now.selection.baseOffset;
+      final before = now.text.substring(0, caret); // включая \n
+      // посчитаем количество НЕпустых строк до caret
+      final lines = before.split('\n');
+      int count = 0;
+      for (final line in lines) {
+        if (line.trim().isNotEmpty) count++;
+      }
+      final number = count + 0; // новая строка станет (count+1)-й непустой; но мы уже на новой пустой, поэтому используем count
+      final insert = '${number + 1}. ';
+      final newText = now.text.replaceRange(caret, caret, insert);
+      _internalEdit = true;
+      _ctrl.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: caret + insert.length),
+      );
+      _internalEdit = false;
+      _lastValue = _ctrl.value;
+      return;
+    }
+    _lastValue = now;
   }
 
   @override
@@ -910,155 +949,126 @@ class _NoteEditorState extends State<NoteEditor> {
     final isNew = widget.note == null;
     final inGroup = widget.note?.groupId != null;
 
-    final previewText = _formatPreview(_ctrl.text, numbered: _numbered);
-
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-        left: 16, right: 16, top: 8,
-      ),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Row(children: [
-          Text(isNew ? 'Новая заметка' : 'Редактирование', style: Theme.of(context).textTheme.titleLarge),
-          const Spacer(),
-          IconButton(
-            tooltip: 'Вставить текущую дату',
-            onPressed: () {
-              final now = DateTime.now();
-              final s = '${_pad(now.day)}.${_pad(now.month)}.${now.year} ${_pad(now.hour)}:${_pad(now.minute)}';
-              final sel = _ctrl.selection;
-              final t = _ctrl.text;
-              final inserted = t.replaceRange(sel.start >= 0 ? sel.start : t.length, sel.end >= 0 ? sel.end : t.length, s);
-              _ctrl.text = inserted;
-              _ctrl.selection = TextSelection.collapsed(offset: (sel.start >= 0 ? sel.start : t.length) + s.length);
-            },
-            icon: const Icon(Icons.calendar_month),
-          ),
-        ]),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            Expanded(
-              child: SwitchListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                value: _numbered,
-                onChanged: (v) => setState(() => _numbered = v),
-                title: const Text('Нумерация строк'),
-              ),
-            ),
-            if (inGroup)
-              TextButton.icon(
-                onPressed: () => setState(() => _detachFromGroup = !_detachFromGroup),
-                icon: Icon(_detachFromGroup ? Icons.check_box : Icons.check_box_outline_blank),
-                label: const Text('Отделить от группы'),
-              ),
-          ],
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom + 12,
+          left: 16, right: 16, top: 8,
         ),
-        const SizedBox(height: 6),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Wrap(
-            spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Заголовок + быстрые действия
+          Row(children: [
+            Text(isNew ? 'Новая заметка' : 'Редактирование', style: Theme.of(context).textTheme.titleLarge),
+            const Spacer(),
+            IconButton(
+              tooltip: 'Вставить текущую дату',
+              onPressed: () {
+                final now = DateTime.now();
+                final s = '${_pad(now.day)}.${_pad(now.month)}.${now.year} ${_pad(now.hour)}:${_pad(now.minute)}';
+                final sel = _ctrl.selection;
+                final t = _ctrl.text;
+                final start = sel.start >= 0 ? sel.start : t.length;
+                final end = sel.end >= 0 ? sel.end : t.length;
+                _internalEdit = true;
+                _ctrl.text = t.replaceRange(start, end, s);
+                _ctrl.selection = TextSelection.collapsed(offset: start + s.length);
+                _internalEdit = false;
+                _lastValue = _ctrl.value;
+              },
+              icon: const Icon(Icons.calendar_month),
+            ),
+          ]),
+
+          // Переключатели + КНОПКИ СВЕРХУ
+          const SizedBox(height: 6),
+          Row(
             children: [
-              _ColorDot(
-                color: null,
-                selected: _selectedColor == null,
-                onTap: () => setState(() => _selectedColor = null),
-                label: 'Без цвета',
+              Expanded(
+                child: SwitchListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  value: _numbered,
+                  onChanged: (v) => setState(() => _numbered = v),
+                  title: const Text('Нумерация строк'),
+                ),
               ),
-              for (final c in _palette())
-                _ColorDot(
-                  color: c,
-                  selected: _selectedColor?.value == c.value,
-                  onTap: () => setState(() => _selectedColor = c),
+              if (inGroup)
+                TextButton.icon(
+                  onPressed: () => setState(() => _detachFromGroup = !_detachFromGroup),
+                  icon: Icon(_detachFromGroup ? Icons.check_box : Icons.check_box_outline_blank),
+                  label: const Text('Отделить от группы'),
                 ),
             ],
           ),
-        ),
-        const SizedBox(height: 10),
-        TextField(
-          controller: _ctrl, autofocus: true, minLines: 6, maxLines: 12,
-          decoration: const InputDecoration(hintText: 'Текст заметки…'),
-        ),
-        const SizedBox(height: 10),
-        // Живой предпросмотр нумерации
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Text('Предпросмотр', style: Theme.of(context).textTheme.labelLarge),
-        ),
-        const SizedBox(height: 6),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(.5),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Text(
-            previewText.isEmpty ? '—' : previewText,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Row(children: [
-          Expanded(
-            child: FilledButton.icon(
-              onPressed: () {
-                final raw = _ctrl.text.trim();
-                final text = raw.isEmpty ? '' : raw;
-                var note = (widget.note ?? Note.newNote()).copyWith(
-                  text: text,
-                  numbered: _numbered,
-                  updatedAt: DateTime.now(),
-                  colorHex: _selectedColor?.value,
-                  keepNullColor: _selectedColor == null,
-                );
-                final detached = _detachFromGroup && widget.note?.groupId != null;
-                if (detached) {
-                  note = note.copyWith(groupId: null, setGroupId: true);
-                }
-                Navigator.of(context).pop(NoteActionResult(note: note, detachedFromGroup: detached));
-              },
-              icon: const Icon(Icons.check), label: const Text('Сохранить'),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: () => Navigator.of(context).maybePop(),
-              icon: const Icon(Icons.close), label: const Text('Отмена'),
-            ),
-          ),
-        ]),
-        if (!isNew) ...[
-          const SizedBox(height: 8),
+
+          const SizedBox(height: 6),
           Align(
             alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: () async {
-                final ok = await showDialog<bool>(
-                  context: context,
-                  builder: (_) => AlertDialog(
-                    title: const Text('Удалить заметку?'),
-                    content: const Text('Действие необратимо.'),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
-                      FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить')),
-                    ],
+            child: Wrap(
+              spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _ColorDot(
+                  color: null,
+                  selected: _selectedColor == null,
+                  onTap: () => setState(() => _selectedColor = null),
+                  label: 'Без цвета',
+                ),
+                for (final c in _palette())
+                  _ColorDot(
+                    color: c,
+                    selected: _selectedColor?.value == c.value,
+                    onTap: () => setState(() => _selectedColor = c),
                   ),
-                );
-                if (ok == true) {
-                  final note = widget.note!;
-                  Navigator.of(context).pop(NoteActionResult(note: note, delete: true));
-                }
-              },
-              icon: const Icon(Icons.delete_outline),
-              label: const Text('Удалить заметку'),
+              ],
             ),
           ),
-        ],
-      ]),
+
+          // Кнопки Сохранить/Отмена — ПЕРЕД полем, чтобы не перекрывались системной панелью
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: () {
+                  final raw = _ctrl.text.trimRight(); // не трогаем левый, чтобы не ломать номера
+                  final text = raw;
+                  var note = (widget.note ?? Note.newNote()).copyWith(
+                    text: text,
+                    numbered: _numbered,
+                    updatedAt: DateTime.now(),
+                    colorHex: _selectedColor?.value,
+                    keepNullColor: _selectedColor == null,
+                  );
+                  final detached = _detachFromGroup && widget.note?.groupId != null;
+                  if (detached) {
+                    note = note.copyWith(groupId: null, setGroupId: true);
+                  }
+                  Navigator.of(context).pop(NoteActionResult(note: note, detachedFromGroup: detached));
+                },
+                icon: const Icon(Icons.check), label: const Text('Сохранить'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: const Icon(Icons.close), label: const Text('Отмена'),
+              ),
+            ),
+          ]),
+
+          const SizedBox(height: 10),
+          // Само поле — внизу
+          TextField(
+            controller: _ctrl,
+            autofocus: true,
+            minLines: 8,
+            maxLines: 16,
+            keyboardType: TextInputType.multiline,
+            textInputAction: TextInputAction.newline,
+            decoration: const InputDecoration(hintText: 'Текст заметки…'),
+          ),
+        ]),
+      ),
     );
   }
 }
@@ -1171,7 +1181,7 @@ class _GroupEditorState extends State<GroupEditor> {
                       maxLines: 1, overflow: TextOverflow.ellipsis,
                     ),
                     subtitle: Text(
-                      _formatPreview(_restText(n.text), numbered: n.numbered),
+                      _restText(n.text),
                       maxLines: 1, overflow: TextOverflow.ellipsis,
                     ),
                     onTap: () async { await widget.onEditNote(n); setState(() {}); },
@@ -1280,8 +1290,6 @@ class _ErrorPane extends StatelessWidget {
   }
 }
 
-/* ===== Текстовые утилиты (локальная нумерация) ===== */
-
 String _firstLine(String t) {
   final ls = t.trim().split('\n');
   return ls.isEmpty ? '' : ls.first.trim();
@@ -1296,22 +1304,4 @@ String _formatDate(DateTime dt) {
   final now = DateTime.now();
   final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
   return sameDay ? '${_pad(dt.hour)}:${_pad(dt.minute)}' : '${_pad(dt.day)}.${_pad(dt.month)}.${dt.year}';
-}
-
-/// Если [numbered] = true — добавляем "1. ", "2. " ко всем непустым строкам (отображение и предпросмотр).
-String _formatPreview(String text, {required bool numbered}) {
-  if (!numbered) return text;
-  final lines = text.split('\n');
-  int i = 0;
-  final out = <String>[];
-  for (final raw in lines) {
-    final s = raw.trimRight();
-    if (s.isEmpty) {
-      out.add(s);
-    } else {
-      i += 1;
-      out.add('$i. $s');
-    }
-  }
-  return out.join('\n');
 }
