@@ -183,8 +183,8 @@ class Group {
 
   // Приватность (без внешних пакетов)
   bool isPrivate;
-  String? salt;     // случайная соль
-  String? passHash; // «быстрый хеш» на основе соли (обфускация)
+  String? salt;     // случайная «соль»
+  String? passHash; // лёгкая обфускация
 
   Group({
     required this.id,
@@ -231,10 +231,10 @@ class Group {
       );
 }
 
-/* ===================== ХРАНИЛИЩЕ ===================== */
+/* ===================== STORE ===================== */
 
 class NotesStore extends ChangeNotifier {
-  static const _prefsKey = 'notes_v7_grid_groups_private_no_crypto';
+  static const _prefsKey = 'notes_v8_privacy_fix_numbering_fix';
   final List<Note> _notes = [];
   final List<Group> _groups = [];
   bool _loaded = false;
@@ -244,6 +244,13 @@ class NotesStore extends ChangeNotifier {
   List<Group> get groups => List.unmodifiable(_groups);
   bool get isLoaded => _loaded;
   String? get lastError => _error;
+
+  Group? groupById(String id) {
+    for (final g in _groups) {
+      if (g.id == id) return g;
+    }
+    return null;
+  }
 
   Future<void> load() async {
     try {
@@ -472,7 +479,7 @@ class NotesStore extends ChangeNotifier {
     return candidate == hash;
   }
 
-  /* ===================== ПРЕДСТАВЛЕНИЕ ДАННЫХ ДЛЯ GRID ===================== */
+  /* ===================== ДАННЫЕ ДЛЯ GRID ===================== */
 
   List<GridItem> getGridItems({String query = ''}) {
     final q = query.trim().toLowerCase();
@@ -703,7 +710,6 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 
   Future<void> _openGroup(Group g) async {
-    // Если группа приватная — спрашиваем пароль
     if (g.isPrivate) {
       final pass = await _promptPassword(
         context: context,
@@ -1084,7 +1090,7 @@ class _DeleteCorner extends StatelessWidget {
   }
 }
 
-/* ===================== РЕДАКТОР ЗАМЕТКИ ===================== */
+/* ===================== РЕДАКТОР ЗАМЕТКИ (фикс нумерации) ===================== */
 
 class NoteActionResult {
   final Note note;
@@ -1130,7 +1136,7 @@ class _NoteEditorState extends State<NoteEditor> {
   void _toggleNumbering() {
     setState(() {
       _model = _model.copyWith(numbered: !_model.numbered);
-      if (_model.numbered) _ensureFirstNumber();
+      if (_model.numbered) _ensureFirstNumberAlways();
     });
   }
 
@@ -1151,16 +1157,20 @@ class _NoteEditorState extends State<NoteEditor> {
     return KeyEventResult.ignored;
   }
 
-  void _ensureFirstNumber() {
+  /// Вставляет "1. " в НАЧАЛО текущей строки, если там ещё нет цифры.
+  void _ensureFirstNumberAlways() {
     final sel = _text.selection;
     final text = _text.text;
-    final lineStart = _lineStartIndex(text, sel.start);
+    final ls = _lineStartIndex(text, sel.start);
     final line = _lineAt(text, sel.start);
-    if (line.trim().isEmpty) {
-      final newText = text.replaceRange(lineStart, lineStart, '1. ');
+    final hasNumberPrefix = RegExp(r'^\s*\d+\.\s*').hasMatch(line);
+    if (!hasNumberPrefix) {
+      final insert = '1. ';
+      final newText = text.replaceRange(ls, ls, insert);
+      final delta = insert.length;
       _text.value = _text.value.copyWith(
         text: newText,
-        selection: TextSelection.collapsed(offset: sel.start + 3),
+        selection: TextSelection.collapsed(offset: sel.start + delta),
       );
     }
   }
@@ -1350,7 +1360,7 @@ class _NoteEditorState extends State<NoteEditor> {
   }
 }
 
-/* ===================== ГРУППА (лист, приватность) ===================== */
+/* ===================== ГРУППА (фикс приватности) ===================== */
 
 class GroupEditor extends StatefulWidget {
   final NotesStore store;
@@ -1378,10 +1388,13 @@ class GroupEditor extends StatefulWidget {
 
 class _GroupEditorState extends State<GroupEditor> {
   late TextEditingController _title;
+  late Group _group; // локальная актуальная копия
+
   @override
   void initState() {
     super.initState();
-    _title = TextEditingController(text: widget.group.title);
+    _group = widget.group;
+    _title = TextEditingController(text: _group.title);
   }
 
   @override
@@ -1390,8 +1403,13 @@ class _GroupEditorState extends State<GroupEditor> {
     super.dispose();
   }
 
+  void _refreshLocalGroup() {
+    _group = widget.store.groupById(_group.id) ?? _group;
+  }
+
   @override
   Widget build(BuildContext context) {
+    _refreshLocalGroup();
     final notes = widget.notesProvider();
     return SafeArea(
       child: Padding(
@@ -1424,7 +1442,7 @@ class _GroupEditorState extends State<GroupEditor> {
                     await widget.onRename(_title.text.trim().isEmpty
                         ? 'Группа'
                         : _title.text.trim());
-                    if (mounted) Navigator.pop(context);
+                    setState(() => _refreshLocalGroup());
                   },
                 ),
               ],
@@ -1448,7 +1466,7 @@ class _GroupEditorState extends State<GroupEditor> {
                             style: Theme.of(context).textTheme.titleMedium),
                         const Spacer(),
                         Switch(
-                          value: widget.group.isPrivate,
+                          value: _group.isPrivate,
                           onChanged: (v) async {
                             if (v) {
                               final pass = await _promptPassword(
@@ -1465,20 +1483,18 @@ class _GroupEditorState extends State<GroupEditor> {
                                 );
                                 return;
                               }
-                              await widget.store.setGroupPassword(
-                                  widget.group, pass);
-                              setState(() {});
+                              await widget.store.setGroupPassword(_group, pass);
+                              setState(() => _refreshLocalGroup());
                             } else {
-                              await widget.store.clearGroupPassword(
-                                  widget.group);
-                              setState(() {});
+                              await widget.store.clearGroupPassword(_group);
+                              setState(() => _refreshLocalGroup());
                             }
                           },
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
-                    if (widget.group.isPrivate)
+                    if (_group.isPrivate)
                       Row(
                         children: [
                           Expanded(
@@ -1493,14 +1509,14 @@ class _GroupEditorState extends State<GroupEditor> {
                                 );
                                 if (pass == null || pass.length < 4) return;
                                 await widget.store
-                                    .setGroupPassword(widget.group, pass);
+                                    .setGroupPassword(_group, pass);
                                 if (mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
                                         content: Text('Пароль обновлён')),
                                   );
                                 }
-                                setState(() {});
+                                setState(() => _refreshLocalGroup());
                               },
                             ),
                           ),
@@ -1510,8 +1526,7 @@ class _GroupEditorState extends State<GroupEditor> {
                               icon: const Icon(Icons.lock_open),
                               label: const Text('Сделать публичной'),
                               onPressed: () async {
-                                await widget.store
-                                    .clearGroupPassword(widget.group);
+                                await widget.store.clearGroupPassword(_group);
                                 if (mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
@@ -1519,7 +1534,7 @@ class _GroupEditorState extends State<GroupEditor> {
                                             Text('Группа теперь публичная')),
                                   );
                                 }
-                                setState(() {});
+                                setState(() => _refreshLocalGroup());
                               },
                             ),
                           ),
@@ -1587,7 +1602,7 @@ class _GroupEditorState extends State<GroupEditor> {
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                'Обновлено: ${_fmtDate(widget.group.updatedAt)}',
+                'Обновлено: ${_fmtDate(_group.updatedAt)}',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
@@ -1722,3 +1737,4 @@ class GridItem {
   bool get isNote => note != null;
   bool get isGroup => group != null;
 }
+
