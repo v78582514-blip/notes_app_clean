@@ -1,111 +1,47 @@
-name: 📦 Build Android APK
+name: 🚀 Build Android APK
 
 on:
   push:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
-concurrency:
-  group: android-apk-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      JAVA_VERSION: "17"
-      FLUTTER_VERSION: "3.24.0"
-      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-
     steps:
-      - name: 📥 Checkout
+      - name: 📦 Checkout repository
         uses: actions/checkout@v4
 
       - name: ☕ Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-          cache: gradle
+          distribution: 'temurin'
+          java-version: '17'
 
       - name: 🐦 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
-          flutter-version: ${{ env.FLUTTER_VERSION }}
+          flutter-version: '3.24.3'
+          channel: 'stable'
           cache: true
 
-      - name: 📦 flutter pub get
+      - name: 📥 Get dependencies
         run: flutter pub get
 
-      - name: 🔧 Patch compileSdk / minSdk
-        run: |
-          FILE="android/app/build.gradle"
-          if [ -f "$FILE" ]; then
-            sed -i 's/compileSdk\s*=\s*[0-9]\+/compileSdk = 36/g' "$FILE" || true
-            sed -i 's/compileSdkVersion\s\+[0-9]\+/compileSdkVersion 36/g' "$FILE" || true
-            sed -i 's/minSdk\s*=\s*[0-9]\+/minSdk = 23/g' "$FILE" || true
-            sed -i 's/minSdkVersion\s\+[0-9]\+/minSdkVersion 23/g' "$FILE" || true
-          fi
-          echo "OK: compileSdk=36, minSdk=23"
+      - name: 🧹 Clean old build
+        run: flutter clean
 
-      - name: 🔐 Prepare keystore (if secrets present)
-        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+      - name: 🛠️ Fix Android SDK version
         run: |
-          mkdir -p android/app
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/auto-release.jks
-          {
-            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
-            echo "keyPassword=$ANDROID_KEY_PASSWORD"
-            echo "keyAlias=$ANDROID_KEY_ALIAS"
-            echo "storeFile=auto-release.jks"
-          } > android/key.properties
-          echo "Keystore ready"
+          sed -i 's/compileSdkVersion [0-9]\+/compileSdkVersion 36/' android/app/build.gradle || true
+          sed -i 's/targetSdkVersion [0-9]\+/targetSdkVersion 36/' android/app/build.gradle || true
 
-      - name: 🧭 Create local.properties (SDK/Flutter)
-        run: |
-          ANDROID_SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
-          FLUTTER_BIN="$(which flutter)"
-          # /opt/hostedtoolcache/flutter/3.24.0-stable/x64/flutter/bin/flutter -> two parents up = flutter root
-          FLUTTER_ROOT="$(dirname "$(dirname "$FLUTTER_BIN")")"
-          mkdir -p android
-          {
-            echo "sdk.dir=$ANDROID_SDK_DIR"
-            echo "flutter.sdk=$FLUTTER_ROOT"
-          } > android/local.properties
-          cat android/local.properties
+      - name: 🚀 Build release APK
+        run: flutter build apk --release --no-shrink
 
-      - name: 🚀 Build APK with Gradle (release)
-        working-directory: android
-        run: |
-          chmod +x ./gradlew
-          ./gradlew --no-daemon --stacktrace \
-            assembleRelease \
-            -Ptarget-platform=android-arm,android-arm64,android-x64 \
-            -x lint
-
-      - name: 🧾 List outputs for debug
-        run: |
-          echo "== android/app/build/outputs =="
-          ls -R android/app/build/outputs || true
-          echo "== build/app/outputs =="
-          ls -R build/app/outputs || true
-
-      # Загружаем оба возможных пути. Если файла нет — игнорируем, но хотя бы один найдётся.
-      - name: ☁️ Upload APK (flutter-apk)
+      - name: 📂 Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk-flutter-path
+          name: app-release
           path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: ignore
-
-      - name: ☁️ Upload APK (gradle-apk)
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-apk-gradle-path
-          path: android/app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
